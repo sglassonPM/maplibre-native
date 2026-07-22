@@ -229,6 +229,7 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
 @property (nonatomic) IBOutlet MLNMapView *mapView;
 @property (nonatomic) MBXState *currentState;
 @property (weak, nonatomic) IBOutlet UIButton *hudLabel;
+@property (nonatomic, strong) UILabel *isomapsPitchLabel;
 @property (weak, nonatomic) IBOutlet MBXFrameTimeGraphView *frameTimeGraphView;
 @property (nonatomic) NSInteger styleIndex;
 @property (nonatomic) NSMutableArray *styleNames;
@@ -336,6 +337,15 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
   self.styleIndex = -1;
   [self setStyles];
   [self cycleStyles:self];
+
+  /// Isomaps — caméra initiale sur le Mont Blanc, inclinée, pour évaluer le terrain 3D.
+  /// (le terrain a minzoom 6 : en vue monde il n'est jamais sollicité)
+  MLNMapCamera *isomapsCamera =
+      [MLNMapCamera cameraLookingAtCenterCoordinate:CLLocationCoordinate2DMake(45.8326, 6.8652)
+                                       acrossDistance:12000
+                                                pitch:65
+                                              heading:200];
+  [self.mapView setCamera:isomapsCamera animated:NO];
 
   self.mapView.experimental_enableFrameRateMeasurement = YES;
   self.hudLabel.titleLabel.font = [UIFont monospacedDigitSystemFontOfSize:10
@@ -845,7 +855,7 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
             MLNMapCamera *camera = [MLNMapCamera
                 cameraLookingAtCenterCoordinate:CLLocationCoordinate2DMake(39.72707, -104.9986)
                                  acrossDistance:100
-                                          pitch:60
+                                          pitch:55
                                         heading:0];
             __weak MBXViewController *weakSelf = self;
             [self.mapView setCamera:camera
@@ -2531,6 +2541,14 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
   self.styleNames = [NSMutableArray array];
   self.styleURLs = [NSMutableArray array];
 
+  /// Isomaps — satellite + terrain 3D sur les tuiles DEM Isomaps (cdn.iso-maps.com)
+  /// Placé en premier pour être le style chargé au démarrage.
+  if (NSString *isomapsPath = [[NSBundle mainBundle] pathForResource:@"isomaps_terrain_style"
+                                                              ofType:@"json"]) {
+    [self.styleNames addObject:@"Isomaps Terrain 3D"];
+    [self.styleURLs addObject:[NSURL fileURLWithPath:isomapsPath]];
+  }
+
   /// Style that does not require an `apiKey` nor any further configuration
   [self.styleNames addObject:@"OpenFreeMap Liberty"];
   [self.styleURLs addObject:[NSURL URLWithString:@"https://tiles.openfreemap.org/styles/liberty"]];
@@ -2926,6 +2944,57 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
   // that a device with an English-language locale is already effectively
   // using locale-based country labels.
   _localizingLabels = [[self bestLanguageForUser] isEqualToString:@"en"];
+
+  /// Isomaps — une fois le style chargé (et la vue dimensionnée), placer la caméra
+  /// sur le Mont Blanc, inclinée : le terrain a minzoom 6 et n'est pas sollicité
+  /// en vue monde. Une seule fois, pour ne pas bloquer la navigation manuelle.
+  static BOOL isomapsCameraApplied = NO;
+  if (!isomapsCameraApplied && [style.name isEqualToString:@"Isomaps Satellite + Terrain 3D"]) {
+    isomapsCameraApplied = YES;
+    // Isomaps — cycle de 3 caméras (large / rasante / rapprochée) toutes les 8 s,
+    // pour capturer plusieurs angles sans rebuild. La vue rasante est celle qui
+    // ouvre le plus les fissures entre tuiles.
+    static const struct {
+        double distance, pitch, heading;
+    } isomapsCameras[] = {
+        {45000, 45, 45},  // large, de trois quarts
+        {18000, 78, 200}, // rasante — cas le plus défavorable
+        {9000, 60, 320},  // rapprochée
+    };
+    // Lever le plafond d'inclinaison (60° par défaut) pour pouvoir regarder l'horizon
+    // et le ciel au-dessus du relief.
+    mapView.maximumPitch = 60.0;
+
+    // Vue du DESSUS (pitch 0) pour juger le chevauchement des tuiles : de haut, deux
+    // tuiles superposees se voient comme des grilles dedoublees, un maillage propre = grille nette.
+    // Vue classique depuis Sallanches (~22 km au NO) sur le massif du Mont Blanc, pitch eleve.
+    [mapView setCamera:[MLNMapCamera cameraLookingAtCenterCoordinate:CLLocationCoordinate2DMake(45.8326, 6.8652)
+                                                      acrossDistance:22000
+                                                               pitch:55
+                                                             heading:123]
+              animated:NO];
+
+    // Isomaps — overlay du pitch en temps reel, pour reperer le seuil ou les trous reapparaissent.
+    if (!self.isomapsPitchLabel) {
+        UILabel *lbl = [[UILabel alloc] init];
+        lbl.font = [UIFont monospacedDigitSystemFontOfSize:22 weight:UIFontWeightBold];
+        lbl.textColor = [UIColor whiteColor];
+        lbl.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.55];
+        lbl.textAlignment = NSTextAlignmentCenter;
+        lbl.layer.cornerRadius = 8;
+        lbl.clipsToBounds = YES;
+        lbl.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.view addSubview:lbl];
+        [NSLayoutConstraint activateConstraints:@[
+            [lbl.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+            [lbl.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:50],
+            [lbl.widthAnchor constraintEqualToConstant:150],
+            [lbl.heightAnchor constraintEqualToConstant:34],
+        ]];
+        self.isomapsPitchLabel = lbl;
+    }
+    self.isomapsPitchLabel.text = [NSString stringWithFormat:@"pitch %.0f°", mapView.camera.pitch];
+  }
 }
 
 - (BOOL)mapView:(MLNMapView *)mapView
@@ -2959,6 +3028,9 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
 - (void)mapViewRegionIsChanging:(MLNMapView *)mapView {
   [self updateHUD];
   [self updateHelperMapViews];
+  if (self.isomapsPitchLabel) {
+    self.isomapsPitchLabel.text = [NSString stringWithFormat:@"pitch %.0f°", mapView.camera.pitch];
+  }
 }
 
 - (void)mapView:(MLNMapView *)mapView
