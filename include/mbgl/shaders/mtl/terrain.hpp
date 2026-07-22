@@ -19,9 +19,10 @@ enum {
 struct alignas(16) TerrainDrawableUBO {
     /*  0 */ float4x4 matrix;
     /* 64 */ float4 dem_coords;
-    /* 80 */
+    /* 80 */ float4 edge_dz; // deficit de resolution DEM de la voisine sur chaque arete (W,E,N,S)
+    /* 96 */
 };
-static_assert(sizeof(TerrainDrawableUBO) == 5 * 16, "wrong size");
+static_assert(sizeof(TerrainDrawableUBO) == 6 * 16, "wrong size");
 
 struct alignas(16) TerrainTilePropsUBO {
     /*  0 */ float2 dem_tl;
@@ -58,7 +59,7 @@ struct ShaderSource<BuiltIn::TerrainShader, gfx::Backend::Type::Metal> {
     static constexpr auto source = R"(
 
 struct VertexStage {
-    short4 pos [[attribute(0)]]; // xy = tile position, z = skirt flag (1 = skirt)
+    short4 pos [[attribute(0)]]; // xy = position, z = drapeau de jupe, w = drapeaux d'arete
 };
 
 struct FragmentStage {
@@ -88,10 +89,45 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     float elevation = get_elevation(pos, demTexture, demSampler, drawable.dem_coords, props.unpack,
                                     drawable.dem_coords.w, props.exaggeration, 1.0);
 
-    // Skirt vertices hang below the surface by elevation_offset, forming a curtain
-    // that hides the cracks between neighbouring tiles at different zoom levels
-    // (maplibre-gl-js u_ele_delta). pos.z carries the skirt flag.
-    const float ele_delta = (float(vertx.pos.z) == 1.0) ? props.elevation_offset : 0.0;
+    // Raccord des aretes : sur un bord dont la voisine est plus grossiere de edge_dz niveaux
+    // de resolution DEM, on remplace l'altitude par l'interpolation lineaire entre les deux
+    // points de la grille GROSSIERE qui encadrent le sommet. L'arete devient le meme segment
+    // que celui de la voisine -> plus de marche, plus de trou. pos.w porte les drapeaux d'arete.
+    const int edgeFlags = int(vertx.pos.w);
+    const float texStep = 8192.0 / drawable.dem_coords.w; // un texel DEM en unites de pos
+    float dzY = 0.0; // aretes ouest/est : la position varie en y
+    if ((edgeFlags & 1) != 0) { dzY = max(dzY, drawable.edge_dz.x); }
+    if ((edgeFlags & 2) != 0) { dzY = max(dzY, drawable.edge_dz.y); }
+    float dzX = 0.0; // aretes nord/sud : la position varie en x
+    if ((edgeFlags & 4) != 0) { dzX = max(dzX, drawable.edge_dz.z); }
+    if ((edgeFlags & 8) != 0) { dzX = max(dzX, drawable.edge_dz.w); }
+    if (dzY > 0.0) {
+        const float s = texStep * exp2(dzY);
+        const float y0 = floor(pos.y / s) * s;
+        const float y1 = min(y0 + s, 8192.0);
+        const float e0 = get_elevation(float2(pos.x, y0), demTexture, demSampler, drawable.dem_coords,
+                                       props.unpack, drawable.dem_coords.w, props.exaggeration, 1.0);
+        const float e1 = get_elevation(float2(pos.x, y1), demTexture, demSampler, drawable.dem_coords,
+                                       props.unpack, drawable.dem_coords.w, props.exaggeration, 1.0);
+        elevation = mix(e0, e1, (s > 0.0) ? (pos.y - y0) / s : 0.0);
+    }
+    if (dzX > 0.0) {
+        const float s = texStep * exp2(dzX);
+        const float x0 = floor(pos.x / s) * s;
+        const float x1 = min(x0 + s, 8192.0);
+        const float e0 = get_elevation(float2(x0, pos.y), demTexture, demSampler, drawable.dem_coords,
+                                       props.unpack, drawable.dem_coords.w, props.exaggeration, 1.0);
+        const float e1 = get_elevation(float2(x1, pos.y), demTexture, demSampler, drawable.dem_coords,
+                                       props.unpack, drawable.dem_coords.w, props.exaggeration, 1.0);
+        elevation = mix(e0, e1, (s > 0.0) ? (pos.x - x0) / s : 0.0);
+    }
+
+    // Jupe PAR BORD : elle ne descend a pleine profondeur que sur les aretes en frontiere
+    // de LOD (edge_dz > 0), la ou le raccord laisse un residu a couvrir. Sur les 99 % d'aretes
+    // qui s'accordent deja, la jupe est quasi nulle -> plus de rideaux visibles a fort pitch.
+    // dzX/dzY viennent du raccord ci-dessus (deficit de resolution DEM de la voisine).
+    const float skirtFactor = (max(dzX, dzY) > 0.0) ? 1.0 : 0.05;
+    const float ele_delta = (float(vertx.pos.z) == 1.0) ? props.elevation_offset * skirtFactor : 0.0;
     float4 position = drawable.matrix * float4(pos.x, pos.y, elevation - ele_delta, 1.0);
 
     return {
@@ -108,10 +144,7 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
 #if defined(OVERDRAW_INSPECTOR)
     return half4(1.0);
 #endif
-
-    // Sample the map texture (render-to-texture output) for the surface color
-    // Note: Y-coordinate is flipped (1.0 - y) to match OpenGL convention
-    return half4(mapTexture.sample(mapSampler, float2(in.uv.x, 1.0 - in.uv.y)));
+    return half4(mapTexture.sample(mapSampler, in.uv));
 }
 )";
 };

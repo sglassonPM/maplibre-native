@@ -94,6 +94,7 @@ std::set<UnwrappedTileID> RenderTerrain::expandToDeepestCover(const std::set<Unw
     for (const auto& id : tileIDs) {
         insert(id);
     }
+
     return out;
 }
 
@@ -193,9 +194,62 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     // hillshade with no raster). Culling to the frustum, elevation included, leaves
     // only the mesh that is actually visible.
     {
-        DEMElevationProvider elevationProvider(demSource, getExaggeration());
+        // Plage d'altitude conservatrice : le DEM d'une tuile passe d'un ancetre grossier
+        // (plage large) a son DEM propre (plage serree) ; ce resserrement peut faire sortir
+        // la tuile du frustum et provoquer un clignotement. On memorise la plage LA PLUS
+        // LARGE jamais vue par tuile — elle ne peut que s'elargir — pour que la decision de
+        // cull reste stable. StableElevationProvider enveloppe le provider DEM et l'union.
+        struct StableElevationProvider final : util::TileElevationProvider {
+            DEMElevationProvider inner;
+            std::map<CanonicalTileID, Range<double>>& cache;
+            StableElevationProvider(const RenderSource* src, double exa,
+                                    std::map<CanonicalTileID, Range<double>>& c)
+                : inner(src, exa), cache(c) {}
+            std::optional<Range<double>> getTileElevationRange(const CanonicalTileID& id) const override {
+                const auto fresh = inner.getTileElevationRange(id);
+                auto it = cache.find(id);
+                if (fresh) {
+                    Range<double> merged = *fresh;
+                    if (it != cache.end()) {
+                        merged.min = std::min(merged.min, it->second.min);
+                        merged.max = std::max(merged.max, it->second.max);
+                    }
+                    cache.insert_or_assign(id, merged);
+                    return merged;
+                }
+                return it != cache.end() ? std::optional<Range<double>>(it->second) : std::nullopt;
+            }
+        };
+        StableElevationProvider elevationProvider(demSource, getExaggeration(), meshTileElevation);
         const util::TileCoverParameters cullParams{.transformState = state, .elevationProvider = &elevationProvider};
-        meshTiles = util::frustumCull(cullParams, meshTiles);
+        const auto candidates = meshTiles; // avant cull : univers de retention
+        const auto visible = util::frustumCull(cullParams, meshTiles);
+
+        // Hysteresis : marquer les tuiles visibles cette frame, puis garder toute
+        // candidate vue au cours des kRetentionFrames dernieres. Une tuile qui clignote
+        // (visible une frame sur deux) voit son marqueur remis a jour et ne disparait
+        // donc jamais ; une tuile qui quitte reellement le champ est larguee apres le delai.
+        constexpr uint64_t kRetentionFrames = 90;
+        for (const auto& id : visible) {
+            meshTileLastVisible[id] = demUpdateCounter;
+        }
+        std::set<UnwrappedTileID> retained;
+        for (const auto& id : candidates) {
+            const auto it = meshTileLastVisible.find(id);
+            if (it != meshTileLastVisible.end() && demUpdateCounter - it->second <= kRetentionFrames) {
+                retained.insert(id);
+            }
+        }
+        // Purge des entrees perimees pour eviter une croissance sans borne
+        for (auto it = meshTileLastVisible.begin(); it != meshTileLastVisible.end();) {
+            if (demUpdateCounter - it->second > kRetentionFrames) {
+                it = meshTileLastVisible.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        const auto before = candidates.size();
+        meshTiles = std::move(retained);
     }
 
     // Drop drawables and cached DEM textures for tiles that left the mesh tile
@@ -252,6 +306,62 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             }
             demTextures.erase(id);
         }
+    }
+
+    // Isomaps — raccord des aretes. Pour chaque tuile du maillage, le deficit de zoom
+    // de la voisine de chaque cote (ouest, est, nord, sud). Une voisine plus grossiere
+    // echantillonne le DEM moins finement : sans alignement, les deux tuiles lisent des
+    // altitudes differentes sur leur arete commune et la couture s'ouvre.
+    // Raccord des aretes — resolution DEM EFFECTIVE de chaque tuile du maillage : le zoom de
+    // son propre DEM s'il est charge, sinon celui du meilleur ancetre disponible. Une tuile fine
+    // bordant une grossiere cree une marche d'altitude, donc un trou que la jupe ne couvre pas ;
+    // on la comble en alignant l'arete sur la resolution de la voisine.
+    meshTileDemZoom.clear();
+    for (const auto& id : meshTiles) {
+        if (demTextures.contains(id)) {
+            meshTileDemZoom[id] = static_cast<int>(id.canonical.z);
+            continue;
+        }
+        int best = -1;
+        for (const auto& [cand, entry] : demTextures) {
+            if (id.isChildOf(cand) && static_cast<int>(cand.canonical.z) > best) {
+                best = static_cast<int>(cand.canonical.z);
+            }
+        }
+        meshTileDemZoom[id] = best;
+    }
+    drawableEdgeDz.clear();
+    for (const auto& id : meshTiles) {
+        std::array<float, 4> dz{{0.0f, 0.0f, 0.0f, 0.0f}};
+        const auto self = meshTileDemZoom.find(id);
+        if (self != meshTileDemZoom.end() && self->second >= 0) {
+            const int z = static_cast<int>(id.canonical.z);
+            const int n = 1 << z;
+            const std::array<std::pair<int, int>, 4> dirs{{{-1, 0}, {1, 0}, {0, -1}, {0, 1}}};
+            for (size_t e = 0; e < dirs.size(); ++e) {
+                const int nx = static_cast<int>(id.canonical.x) + dirs[e].first;
+                const int ny = static_cast<int>(id.canonical.y) + dirs[e].second;
+                if (ny < 0 || ny >= n) {
+                    continue;
+                }
+                const int wx = ((nx % n) + n) % n;
+                for (int zz = z; zz >= 0; --zz) {
+                    const int sh = z - zz;
+                    const UnwrappedTileID cand(id.wrap,
+                                               CanonicalTileID(static_cast<uint8_t>(zz),
+                                                               static_cast<uint32_t>(wx >> sh),
+                                                               static_cast<uint32_t>(ny >> sh)));
+                    const auto nb = meshTileDemZoom.find(cand);
+                    if (nb != meshTileDemZoom.end()) {
+                        if (nb->second >= 0 && self->second > nb->second) {
+                            dz[e] = static_cast<float>(self->second - nb->second);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        drawableEdgeDz[OverscaledTileID(id.canonical.z, id.wrap, id.canonical)] = dz;
     }
 
     // Create terrain drawables for each mesh tile
@@ -468,6 +578,20 @@ void RenderTerrain::renderDepth(RenderOrchestrator& orchestrator,
         depthRenderTarget->setClearColor(Color::white());
         depthRenderTarget->addLayerGroup(depthLayerGroup, /*replace=*/true);
     }
+
+    // The depth twin is intentionally not registered with the orchestrator, so it is
+    // skipped by the global upload pass in Renderer::Impl::render(). Its drawables
+    // would therefore reach draw() with buffers that were never uploaded — fatal on
+    // Metal ("Index buffer not uploaded"). Upload it here, right before rendering.
+    {
+        const auto uploadPass = parameters.encoder->createUploadPass("terrain-depth-upload",
+                                                                    parameters.backend.getDefaultRenderable());
+#if !defined(NDEBUG)
+        const auto debugGroup = uploadPass->createDebugGroup("terrain-depth-upload");
+#endif
+        depthLayerGroup->upload(*uploadPass);
+    }
+
     depthRenderTarget->render(orchestrator, renderTree, parameters);
 }
 
@@ -523,11 +647,19 @@ void RenderTerrain::generateMesh(gfx::Context& /*context*/) {
     // Each vertex is 4 shorts: x, y, skirt flag (0 = surface, 1 = skirt),
     // unused. uv is derived from x,y in the shader, so the 3rd/4th shorts are free
     // to carry the skirt flag (the native analog of gl-js Pos3d.z).
+    const auto edgeFlags = [&](float x, float y) -> int16_t {
+        int16_t f = 0;
+        if (x <= 0.0f) f |= 1;
+        if (x >= static_cast<float>(util::EXTENT)) f |= 2;
+        if (y <= 0.0f) f |= 4;
+        if (y >= static_cast<float>(util::EXTENT)) f |= 8;
+        return f;
+    };
     const auto addVert = [&](float x, float y, int16_t skirt) {
         vertices.push_back(static_cast<int16_t>(x));
         vertices.push_back(static_cast<int16_t>(y));
         vertices.push_back(skirt);
-        vertices.push_back(0);
+        vertices.push_back(edgeFlags(x, y));
     };
 
     // Surface grid

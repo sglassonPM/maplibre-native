@@ -4,6 +4,7 @@
 #include <mbgl/util/immutable.hpp>
 #include <mbgl/tile/tile_id.hpp>
 #include <mbgl/util/constants.hpp>
+#include <mbgl/util/range.hpp>
 #include <mbgl/gfx/vertex_buffer.hpp>
 #include <mbgl/gfx/index_buffer.hpp>
 #include <mbgl/renderer/texture_pool.hpp>
@@ -121,6 +122,14 @@ public:
      * tile-local position (0..EXTENT) into its bound DEM texture's normalized
      * space, for the shader's get_elevation() (see the demCoords built in update)
      */
+    /// Deficit de resolution DEM de la voisine sur chaque arete (W, E, N, S). 0 = voisine
+    /// de meme resolution ou plus fine ; >0 = plus grossiere, les sommets de cette arete
+    /// alignent leur echantillonnage DEM sur la grille de la voisine (raccord des bords).
+    std::array<float, 4> getDrawableEdgeDz(const OverscaledTileID& tileID) const {
+        const auto it = drawableEdgeDz.find(tileID);
+        return it != drawableEdgeDz.end() ? it->second : std::array<float, 4>{{0.0f, 0.0f, 0.0f, 0.0f}};
+    }
+
     std::array<float, 4> getDrawableDemCoords(const OverscaledTileID& tileID) const {
         const auto it = drawableDemCoords.find(tileID);
         return it != drawableDemCoords.end()
@@ -246,8 +255,23 @@ private:
     // an ancestor tile's DEM is bound); read by the terrain layer tweaker
     std::map<OverscaledTileID, std::array<float, 4>> drawableDemCoords;
 
+    // Raccord des aretes : deficit de resolution DEM par arete (W,E,N,S) et resolution DEM
+    // effective par tuile (zoom canonique - profondeur de l'ancetre DEM utilise).
+    std::map<OverscaledTileID, std::array<float, 4>> drawableEdgeDz;
+    std::map<UnwrappedTileID, int> meshTileDemZoom;
+
+    // Hysteresis anti-clignotement : derniere frame ou chaque tuile du maillage a ete
+    // jugee visible. Une tuile au bord du frustum bascule dedans/dehors quand son DEM se
+    // charge (sa plage d'altitude change) ; on la garde quelques frames apres sa derniere
+    // apparition pour casser l'oscillation.
+    std::map<UnwrappedTileID, uint64_t> meshTileLastVisible;
+
+    // Plage d'altitude la plus large vue par tuile — union monotone, pour un cull stable
+    std::map<CanonicalTileID, Range<double>> meshTileElevation;
+
+
     // Mesh resolution (vertices per side)
-    static constexpr size_t MESH_SIZE = 128;
+    static constexpr size_t MESH_SIZE = 128; // 254 max (index uint16) double le detail close-up mais 4x la geometrie
 
     // Cached DEM source
     RenderSource* demSource = nullptr;

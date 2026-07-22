@@ -35,12 +35,16 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
     // (default 1.0 renders true-scale elevation)
     const float exaggeration = terrain->getExaggeration();
 
-    // Skirt depth (u_ele_delta): the shader drops the mesh's skirt vertices by
-    // this many metres into a curtain that hides the cracks between neighbouring
-    // tiles at different zoom levels. ~1/5 of the tile's world width at this zoom,
-    // matching maplibre-gl-js Terrain.getSkirtLength().
-    const auto zoom = std::max(static_cast<double>(parameters.state.getZoom()), 0.0);
-    const float elevationOffset = static_cast<float>(util::M2PI * util::EARTH_RADIUS_M / std::pow(2.0, zoom) / 5.0);
+    // Skirt depth (u_ele_delta): the shader drops the mesh's skirt vertices by this many
+    // metres into a curtain, a safety net for transient cracks while neighbouring tiles at
+    // different zoom levels stream in.
+    //
+    // Isomaps: FIXED short depth instead of maplibre-gl-js Terrain.getSkirtLength()
+    // (1/5 of the tile's world width at the current zoom). That formula gave ~3.9 km at
+    // z11 — visible curtains on real alpine terrain — and, being zoom-proportional, shrank
+    // to ~2.4 m at z15, reopening cracks. A crack comes from an elevation mismatch between
+    // tile edges, measured in metres of terrain, so a fixed metric depth is the right unit.
+    const float elevationOffset = 8.0f;
 
     // Populate layer-level UBO with terrain properties
     auto& layerUniforms = layerGroup.mutableUniformBuffers();
@@ -78,7 +82,8 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
         const TerrainDrawableUBO drawableUBO = {
 #endif
             .matrix = util::cast<float>(matrix),
-            .dem_coords = terrain->getDrawableDemCoords(*drawable.getTileID())
+            .dem_coords = terrain->getDrawableDemCoords(*drawable.getTileID()),
+            .edge_dz = terrain->getDrawableEdgeDz(*drawable.getTileID())
         };
 
 #if !MLN_UBO_CONSOLIDATION
