@@ -2199,6 +2199,17 @@ public:
     [self notifyGestureDidBegin];
   } else if (pan.state == UIGestureRecognizerStateChanged) {
     CGPoint delta = [pan translationInView:pan.view];
+    // Isomaps — amortir le deplacement : en vue 3D inclinee un petit glissement balaie beaucoup de
+    // terrain (effet rasant), le pan parait trop rapide, et d'autant plus a fort zoom. On reduit la
+    // sensibilite, et davantage a mesure qu'on zoome : ~0.6 en vue large, jusqu'a ~0.3 tres zoome.
+    // 1.0 = comportement d'origine.
+    const CGFloat kZoom = (CGFloat)self.zoomLevel;
+    // Ralentissement franc a partir de z13 (au-dela le pan restait trop rapide) : ~0.6 en vue
+    // large, puis -0.12 par niveau de zoom, plancher 0.18.
+    CGFloat damping = 0.6 - (kZoom - 12.0) * 0.12; // z12->0.6, z13->0.48, z15->0.24, z16+->0.18
+    damping = MAX(0.18, MIN(0.6, damping));
+    delta.x *= damping;
+    delta.y *= damping;
     MLNMapCamera *toCamera = [self cameraByPanningWithTranslation:delta panGesture:pan];
 
     if ([self _shouldChangeFromCamera:oldCamera toCamera:toCamera]) {
