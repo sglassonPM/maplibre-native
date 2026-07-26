@@ -2378,7 +2378,12 @@ public:
 
   CGPoint centerPoint = [self anchorPointForGesture:rotate];
   if (self.anchorRotateOrZoomGesturesToCenterCoordinate) {
-    centerPoint = [self contentCenter];
+    // Isomaps — en 3D on veut « tourner autour de la caméra » : à fort pitch, le centre de l'écran
+    // se projette loin devant (près de l'horizon), donnant une orbite « trop loin ». On ancre plutôt
+    // vers le BAS de l'écran (~85 % de la hauteur), soit le point au sol le plus proche de l'œil,
+    // pour que la vue pivote sur place. À plat (pitch 0) ça reste proche du centre visuel.
+    const CGPoint c = [self contentCenter];
+    centerPoint = CGPointMake(c.x, CGRectGetMaxY(self.bounds) - self.bounds.size.height * 0.15);
   }
   MLNMapCamera *oldCamera = self.camera;
 
