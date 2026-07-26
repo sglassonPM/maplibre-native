@@ -200,6 +200,7 @@ _IOS_APPLICATION_RESOURCES = [
     "app/simple_route.json",
     "app/fill_filter_style.json",
     "app/isomaps_terrain_style.json",
+    "app/isomaps_logo.png",
     "//platform/darwin:app/PluginLayerTestStyle.json",
     "//platform/darwin:test/amsterdam.geojson",
 ] + glob([

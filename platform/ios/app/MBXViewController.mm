@@ -230,6 +230,7 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
 @property (nonatomic) MBXState *currentState;
 @property (weak, nonatomic) IBOutlet UIButton *hudLabel;
 @property (nonatomic, strong) UILabel *isomapsPitchLabel;
+@property (nonatomic, strong) UIImageView *isomapsLogoView;
 @property (weak, nonatomic) IBOutlet MBXFrameTimeGraphView *frameTimeGraphView;
 @property (nonatomic) NSInteger styleIndex;
 @property (nonatomic) NSMutableArray *styleNames;
@@ -2994,6 +2995,28 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
         self.isomapsPitchLabel = lbl;
     }
     self.isomapsPitchLabel.text = [NSString stringWithFormat:@"pitch %.0f°", mapView.camera.pitch];
+
+    // Isomaps — masquer le logo + attribution MapLibre, poser le logo Isomaps (blanc, bas gauche).
+    mapView.logoView.hidden = YES;
+    mapView.attributionButton.hidden = YES;
+    if (!self.isomapsLogoView) {
+        UIImage *logoImg = nil;
+        if (NSString *p = [[NSBundle mainBundle] pathForResource:@"isomaps_logo" ofType:@"png"]) {
+            logoImg = [UIImage imageWithContentsOfFile:p];
+        }
+        UIImageView *logo = [[UIImageView alloc] initWithImage:logoImg];
+        logo.contentMode = UIViewContentModeScaleAspectFit;
+        logo.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.view addSubview:logo];
+        const CGFloat w = 92.0; // hauteur ~ w * 289/1024
+        [NSLayoutConstraint activateConstraints:@[
+            [logo.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:12],
+            [logo.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-8],
+            [logo.widthAnchor constraintEqualToConstant:w],
+            [logo.heightAnchor constraintEqualToConstant:w * 289.0 / 1024.0],
+        ]];
+        self.isomapsLogoView = logo;
+    }
   }
 }
 
