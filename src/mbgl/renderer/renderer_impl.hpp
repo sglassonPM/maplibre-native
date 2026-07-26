@@ -54,7 +54,11 @@ private:
     /// textures they sample. Rebuilding the pool per frame would reallocate every
     /// tile-sized target every frame - churning GPU memory and discarding the
     /// baked content that suppresses drape flicker.
-    TexturePool texturePool{512}; // TODO: tile size
+    // Taille des cibles de drapage (une texture offscreen couleur+profondeur+stencil par tuile de
+    // terrain). 256 correspond à nos tuiles satellite/DEM (256) : passer à 512 quadruplait la mémoire
+    // (drapage d'un 256 sur un 512 = suréchantillonnage sans gain) et provoquait des OOM à fort pitch
+    // (cover ~40-100 tuiles × ~2 Mo). 256 = ~4× moins de mémoire, sans perte visuelle.
+    TexturePool texturePool{256};
 
     gfx::RendererBackend& backend;
 
