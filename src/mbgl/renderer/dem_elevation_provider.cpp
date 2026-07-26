@@ -57,4 +57,35 @@ std::optional<Range<double>> DEMElevationProvider::getTileElevationRange(const C
     return Range<double>{best->getMinElevation() * exaggeration, best->getMaxElevation() * exaggeration};
 }
 
+StableElevationProvider::StableElevationProvider(const RenderSource* demSource_,
+                                                 double exaggeration_,
+                                                 std::map<CanonicalTileID, Range<double>>& cache_)
+    : inner(demSource_, exaggeration_),
+      cache(cache_) {}
+
+std::optional<Range<double>> StableElevationProvider::getTileElevationRange(const CanonicalTileID& id) const {
+    const auto fresh = inner.getTileElevationRange(id);
+    const auto it = cache.find(id);
+    if (!fresh) {
+        // DEM pas (encore) charge : garder la derniere plage connue plutot que « inconnu »,
+        // pour que l'AABB ne s'effondre pas entre deux chargements.
+        return it != cache.end() ? std::optional<Range<double>>(it->second) : std::nullopt;
+    }
+    Range<double> merged = *fresh;
+    if (it != cache.end()) {
+        merged.min = std::min(merged.min, it->second.min);
+        merged.max = std::max(merged.max, it->second.max);
+    }
+    cache.insert_or_assign(id, merged); // on CACHE la valeur nue (sinon la marge s'accumulerait)
+
+    // Marge de securite sur la valeur RETOURNEE : une boite englobante un peu plus haute et plus
+    // basse est plus surement jugee « visible » par le frustum. Sans elle, une tuile de BORD BAS
+    // (relief proche penchant vers la camera) dont la boite passe sous le plan bas du frustum est
+    // rejetee alors qu'un bout est encore a l'ecran -> elle disparait quand on pan vers le bas
+    // (« masquee trop tot »). Appliquee au provider PARTAGE terrain+sources, donc les deux gardent
+    // la meme tuile de bord : elle reste maillee ET drapee (pas de trou gris).
+    constexpr double kElevationMarginMeters = 800.0;
+    return Range<double>{merged.min - kElevationMarginMeters, merged.max + kElevationMarginMeters};
+}
+
 } // namespace mbgl

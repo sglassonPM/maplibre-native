@@ -111,7 +111,13 @@ public:
 
     double tileLodMinRadius = 3;
     double tileLodScale = 1;
-    double tileLodPitchThreshold = (60.0 / 180.0) * std::numbers::pi;
+    // Isomaps : seuil abaisse a 0 -> variable-zoom des qu'on incline, pour TOUTES les sources.
+    // Au defaut 60deg, a pitch 45-60 le lointain etait couvert au zoom plein : (1) le terrain
+    // explosait en tuiles -> crash memoire, (2) surtout le terrain (force a 0) et le satellite
+    // (a 60) DIVERGEAIENT -> tuiles terrain grossieres drapees par des tuiles satellite fines
+    // partielles -> trous magenta. A 0, terrain et sources partagent le meme cover variable-zoom
+    // -> une tuile satellite par tuile terrain, drapage complet, et cover borne.
+    double tileLodPitchThreshold = 0.0;
     double tileLodZoomShift = 0;
     TileLodMode tileLodMode = TileLodMode::Default;
 };

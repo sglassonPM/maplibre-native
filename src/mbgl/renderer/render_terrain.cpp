@@ -68,6 +68,79 @@ RenderTerrain::RenderTerrain(Immutable<style::Terrain::Impl> impl_)
 
 RenderTerrain::~RenderTerrain() = default;
 
+std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(const TransformState& state,
+                                                         const UpdateParameters& updateParameters) {
+    std::set<UnwrappedTileID> out;
+    if (demSource) {
+        const auto renderTiles = demSource->getRawRenderTiles();
+        if (!renderTiles->empty()) {
+            uint8_t baseZoom = 0;
+            uint8_t minLoadedZoom = 30;
+            for (const auto& renderTile : *renderTiles) {
+                baseZoom = std::max(baseZoom, renderTile.id.canonical.z);
+                minLoadedZoom = std::min(minLoadedZoom, renderTile.id.canonical.z);
+            }
+            StableElevationProvider elevationProvider(demSource, getExaggeration(), meshTileElevation);
+            // Meme seuil variable-zoom que les sources (abaisse a 0 dans map_impl) et cover borne.
+            const util::TileCoverParameters coverParams{
+                .transformState = state,
+                .tileLodMinRadius = updateParameters.tileLodMinRadius,
+                .tileLodScale = updateParameters.tileLodScale,
+                .tileLodPitchThreshold = updateParameters.tileLodPitchThreshold,
+                .tileLodMode = updateParameters.tileLodMode,
+                .elevationProvider = &elevationProvider};
+            const auto cover = util::tileCover(coverParams, baseZoom, Range<uint8_t>(minLoadedZoom, baseZoom));
+            for (const auto& oid : cover) {
+                out.insert(UnwrappedTileID(oid.wrap, oid.canonical));
+            }
+            // Garde-fou : au-dela d'un plafond genereux, on tronque aux tuiles les plus proches
+            // du centre (les plus grandes a l'ecran) plutot que de risquer l'OOM.
+            constexpr size_t maxMeshTiles = 512;
+            if (out.size() > maxMeshTiles) {
+                const auto center = TileCoordinate::fromLatLng(baseZoom, state.getLatLng());
+                std::vector<UnwrappedTileID> byDist(out.begin(), out.end());
+                std::sort(byDist.begin(), byDist.end(), [&](const UnwrappedTileID& a, const UnwrappedTileID& b) {
+                    const double sa = static_cast<double>(1u << (baseZoom - a.canonical.z));
+                    const double sb = static_cast<double>(1u << (baseZoom - b.canonical.z));
+                    const double ax = (a.canonical.x + 0.5) * sa, ay = (a.canonical.y + 0.5) * sa;
+                    const double bx = (b.canonical.x + 0.5) * sb, by = (b.canonical.y + 0.5) * sb;
+                    const double da = (ax - center.p.x) * (ax - center.p.x) + (ay - center.p.y) * (ay - center.p.y);
+                    const double db = (bx - center.p.x) * (bx - center.p.x) + (by - center.p.y) * (by - center.p.y);
+                    return da < db;
+                });
+                out = std::set<UnwrappedTileID>(byDist.begin(), byDist.begin() + maxMeshTiles);
+            }
+        }
+    }
+
+    // Hysteresis : une tuile vue dans les HYSTERESIS_FRAMES dernieres frames est conservee
+    // meme si le cover brut de cette frame la rate (transitoire au bord du frustum pendant un
+    // geste). Filet de securite en plus de la plage d'altitude stable ci-dessus. Borne courte
+    // (~0,25 s a 60 fps) pour ne pas trainer de tuiles hors champ ni gonfler les drapages.
+    constexpr uint64_t HYSTERESIS_FRAMES = 15;
+    for (const auto& id : out) {
+        meshTileLastVisible[id] = demUpdateCounter;
+    }
+    for (auto it = meshTileLastVisible.begin(); it != meshTileLastVisible.end();) {
+        if (demUpdateCounter - it->second > HYSTERESIS_FRAMES) {
+            it = meshTileLastVisible.erase(it);
+        } else {
+            out.insert(it->first);
+            ++it;
+        }
+    }
+
+    // Borne le cache d'altitude (l'union monotone accumule chaque tuile visitee par le DFS au
+    // fil des pans) : au-dela d'un plafond genereux, on repart de zero — il se reremplit en
+    // quelques frames et l'over-coverage transitoire est invisible.
+    constexpr size_t maxElevationCache = 8192;
+    if (meshTileElevation.size() > maxElevationCache) {
+        meshTileElevation.clear();
+    }
+
+    return out;
+}
+
 std::set<UnwrappedTileID> RenderTerrain::augmentWithFrustumCover(std::set<UnwrappedTileID> tiles,
                                                                 const TransformState& state) {
     // La source DEM ne couvre pas toujours tout le frustum visible (coins de l'ecran a
@@ -142,9 +215,9 @@ std::set<UnwrappedTileID> RenderTerrain::expandToDeepestCover(const std::set<Unw
 void RenderTerrain::update(RenderOrchestrator& orchestrator,
                            gfx::ShaderRegistry& shaders,
                            gfx::Context& context,
-                           const TexturePool& texturePool,
+                           TexturePool& texturePool,
                            const TransformState& state,
-                           const std::shared_ptr<UpdateParameters>& /*updateParameters*/,
+                           const std::shared_ptr<UpdateParameters>& updateParameters,
                            const RenderTree& /*renderTree*/,
                            UniqueChangeRequestVec& changes) {
     // Find the DEM source if we haven't already
@@ -218,110 +291,11 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         }
     }
 
-    // The mesh tile set: parent fallback render tiles expanded to the ideal
-    // cover so terrain meshes never overlap (a parent mesh would draw its
-    // lower-resolution drape over the sharp meshes of its loaded children);
-    // synthetic tiles sample ancestor DEM/drape textures instead.
-    std::set<UnwrappedTileID> renderTileIDs;
-    for (const auto& renderTile : *renderTiles) {
-        renderTileIDs.insert(renderTile.id);
-    }
-    renderTileIDs = augmentWithFrustumCover(std::move(renderTileIDs), state);
-    std::set<UnwrappedTileID> meshTiles = expandToDeepestCover(renderTileIDs);
-
-    // Drop mesh tiles that fall outside the view. A sparse DEM contributes large
-    // low-zoom ancestor tiles; expandToDeepestCover subdivides each across its whole
-    // area, but most of a low-zoom tile is off-screen, and meshing it there creates
-    // drape targets that no on-screen source covers - they render empty (near-black
-    // hillshade with no raster). Culling to the frustum, elevation included, leaves
-    // only the mesh that is actually visible.
-    {
-        // Plage d'altitude conservatrice : le DEM d'une tuile passe d'un ancetre grossier
-        // (plage large) a son DEM propre (plage serree) ; ce resserrement peut faire sortir
-        // la tuile du frustum et provoquer un clignotement. On memorise la plage LA PLUS
-        // LARGE jamais vue par tuile — elle ne peut que s'elargir — pour que la decision de
-        // cull reste stable. StableElevationProvider enveloppe le provider DEM et l'union.
-        struct StableElevationProvider final : util::TileElevationProvider {
-            DEMElevationProvider inner;
-            std::map<CanonicalTileID, Range<double>>& cache;
-            StableElevationProvider(const RenderSource* src, double exa,
-                                    std::map<CanonicalTileID, Range<double>>& c)
-                : inner(src, exa), cache(c) {}
-            std::optional<Range<double>> getTileElevationRange(const CanonicalTileID& id) const override {
-                const auto fresh = inner.getTileElevationRange(id);
-                auto it = cache.find(id);
-                if (fresh) {
-                    Range<double> merged = *fresh;
-                    if (it != cache.end()) {
-                        merged.min = std::min(merged.min, it->second.min);
-                        merged.max = std::max(merged.max, it->second.max);
-                    }
-                    cache.insert_or_assign(id, merged);
-                    return merged;
-                }
-                return it != cache.end() ? std::optional<Range<double>>(it->second) : std::nullopt;
-            }
-        };
-        StableElevationProvider elevationProvider(demSource, getExaggeration(), meshTileElevation);
-        const util::TileCoverParameters cullParams{.transformState = state, .elevationProvider = &elevationProvider};
-        const auto candidates = meshTiles; // avant cull : univers de retention
-        const auto culled = util::frustumCull(cullParams, meshTiles);
-
-        // Marge d'un cran : le frustum cull et la couverture (tileCover) ne s'accordent pas
-        // exactement aux coins de l'ecran, si bien qu'une tuile encore visible dans un coin est
-        // rejetee (zone grise). On garde, en plus des tuiles retenues par le cull, toute
-        // candidate ADJACENTE (meme zoom, voisinage 8) a une tuile visible.
-        std::set<UnwrappedTileID> visible = culled;
-        for (const auto& v : culled) {
-            const int z = static_cast<int>(v.canonical.z);
-            const int n = 1 << z;
-            for (int dx = -1; dx <= 1; ++dx) {
-                for (int dy = -1; dy <= 1; ++dy) {
-                    if (dx == 0 && dy == 0) {
-                        continue;
-                    }
-                    const int ny = static_cast<int>(v.canonical.y) + dy;
-                    if (ny < 0 || ny >= n) {
-                        continue;
-                    }
-                    const int nx = ((static_cast<int>(v.canonical.x) + dx) % n + n) % n;
-                    const UnwrappedTileID neighbour(
-                        v.wrap, CanonicalTileID(static_cast<uint8_t>(z), static_cast<uint32_t>(nx),
-                                                static_cast<uint32_t>(ny)));
-                    if (candidates.contains(neighbour)) {
-                        visible.insert(neighbour);
-                    }
-                }
-            }
-        }
-
-        // Hysteresis : marquer les tuiles visibles cette frame, puis garder toute
-        // candidate vue au cours des kRetentionFrames dernieres. Une tuile qui clignote
-        // (visible une frame sur deux) voit son marqueur remis a jour et ne disparait
-        // donc jamais ; une tuile qui quitte reellement le champ est larguee apres le delai.
-        constexpr uint64_t kRetentionFrames = 90;
-        for (const auto& id : visible) {
-            meshTileLastVisible[id] = demUpdateCounter;
-        }
-        std::set<UnwrappedTileID> retained;
-        for (const auto& id : candidates) {
-            const auto it = meshTileLastVisible.find(id);
-            if (it != meshTileLastVisible.end() && demUpdateCounter - it->second <= kRetentionFrames) {
-                retained.insert(id);
-            }
-        }
-        // Purge des entrees perimees pour eviter une croissance sans borne
-        for (auto it = meshTileLastVisible.begin(); it != meshTileLastVisible.end();) {
-            if (demUpdateCounter - it->second > kRetentionFrames) {
-                it = meshTileLastVisible.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        const auto before = candidates.size();
-        meshTiles = std::move(retained);
-        lastRenderedMeshTiles = meshTiles;
-    }
+    // Couverture du maillage : cf. computeMeshCover (tileCover + altitude STABLE + hysteresis).
+    // Publiee dans lastRenderedMeshTiles ; renderer_impl la relit pour les cibles de drapage
+    // (update() precede render() dans la frame -> drapage et maillage strictement identiques).
+    std::set<UnwrappedTileID> meshTiles = computeMeshCover(state, *updateParameters);
+    lastRenderedMeshTiles = meshTiles;
 
     // Drop drawables and cached DEM textures for tiles that left the mesh tile
     // set, keeping everything else intact between frames

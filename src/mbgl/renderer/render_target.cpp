@@ -181,7 +181,13 @@ void RenderTarget::renderDrapedLayerGroups(RenderOrchestrator& orchestrator, Pai
                 overlaps = unwrapped == *drapeTileID || unwrapped.isChildOf(*drapeTileID) ||
                            drapeTileID->isChildOf(unwrapped);
             }
-            drawable.setEnabled(drawable.getEnabled() && overlaps);
+            // Pour le DRAPAGE, on active toute tuile qui RECOUVRE la cible, meme si le rendu principal
+            // l'a culled (getEnabled()==false). Une tuile satellite (empreinte PLATE) au bord bas de
+            // l'ecran passe sous le frustum et est desactivee, alors que la tuile TERRAIN correspondante
+            // (elevee) reste visible -> sans ca le drape restait vide (bord bas non image) qui se
+            // remplissait des qu'on remontait. Le drapage concerne la DONNEE de la tuile, pas la
+            // visibilite de son empreinte plate. L'etat d'origine est restaure juste apres (savedEnabled).
+            drawable.setEnabled(overlaps);
         });
     });
 

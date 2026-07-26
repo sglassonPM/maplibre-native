@@ -236,23 +236,12 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
     const auto& layerRenderItems = renderTree.getLayerRenderItemMap();
 
     if (auto* terrain = orchestrator.getRenderTerrain()) {
-        RenderSource* demSource = orchestrator.getRenderSource(terrain->getSourceID());
-        auto renderTiles = demSource->getRawRenderTiles();
-
-        // Match RenderTerrain's mesh tile set: parent fallback tiles expanded
-        // to the ideal cover so each mesh tile has its own drape target
-        std::set<UnwrappedTileID> renderTileIDs;
-        for (const auto& renderTile : *renderTiles) {
-            renderTileIDs.insert(renderTile.id);
-        }
-        renderTileIDs = RenderTerrain::augmentWithFrustumCover(std::move(renderTileIDs), state);
-        std::set<UnwrappedTileID> demTileIDs = RenderTerrain::expandToDeepestCover(renderTileIDs);
-        // Hysteresis de drapage : garder aussi les cibles des tuiles que le terrain dessinait
-        // encore a la derniere frame (post-hysteresis du maillage). Sinon une tuile retenue
-        // cote maillage perd son imagerie des qu'elle sort du calcul brut -> zone grise en pan.
-        for (const auto& id : terrain->getLastRenderedMeshTiles()) {
-            demTileIDs.insert(id);
-        }
+        // Une cible de drapage par tuile de terrain. On reprend EXACTEMENT l'ensemble que le
+        // terrain vient de calculer cette frame (post-altitude-stable + hysteresis) : update()
+        // du terrain tourne pendant la construction du RenderTree, donc AVANT ce render(), et
+        // publie lastRenderedMeshTiles. Drapage et maillage sont ainsi strictement identiques
+        // — ni tuile maillee sans imagerie (gris), ni imagerie sans maillage (gaspillage).
+        const std::set<UnwrappedTileID>& demTileIDs = terrain->getLastRenderedMeshTiles();
         for (const auto& id : demTileIDs) {
             texturePool.createRenderTarget(context, id, renderTreeParameters.backgroundColor);
         }

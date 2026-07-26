@@ -240,11 +240,20 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
     //
     // The DEM tiles read here are the previous frame's, as in gl-js: the cover only has
     // to be conservative, and a DEM that is still loading converges on the next frame.
+    // Meme provider d'altitude que le maillage terrain (StableElevationProvider sur le cache
+    // partage de RenderTerrain), et non un DEMElevationProvider plain. Le terrain lit le DEM plus
+    // tard dans la frame que les sources : sans partage, terrain et sources voient des altitudes
+    // differentes -> le terrain maille des tuiles near-bottom (relief penchant vers la camera)
+    // que les sources n'ont pas demandees -> drape vide (magenta). L'union monotone partagee rend
+    // le cover des sources >= au maillage terrain, donc chaque tuile terrain a sa tuile a draper.
     const bool terrainEnabled = renderTerrain && renderTerrain->isEnabled();
-    const DEMElevationProvider elevationProvider{
-        terrainEnabled ? getRenderSource(renderTerrain->getSourceID()) : nullptr,
-        terrainEnabled ? renderTerrain->getExaggeration() : 1.0};
-    tileParameters.elevationProvider = terrainEnabled ? &elevationProvider : nullptr;
+    std::optional<StableElevationProvider> elevationProvider;
+    if (terrainEnabled) {
+        elevationProvider.emplace(getRenderSource(renderTerrain->getSourceID()),
+                                  renderTerrain->getExaggeration(),
+                                  renderTerrain->getElevationCache());
+    }
+    tileParameters.elevationProvider = terrainEnabled ? &*elevationProvider : nullptr;
 
     const ImageDifference imageDiff = diffImages(imageImpls, updateParameters->images);
     imageImpls = updateParameters->images;
@@ -990,7 +999,7 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
                                       const TransformState& state,
                                       const std::shared_ptr<UpdateParameters>& updateParameters,
                                       const RenderTree& renderTree,
-                                      const TexturePool& texturePool) {
+                                      TexturePool& texturePool) {
     MLN_TRACE_FUNC();
 
     const bool isMapModeContinuous = updateParameters->mode == MapMode::Continuous;

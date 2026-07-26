@@ -142,7 +142,7 @@ public:
                       const TransformState&,
                       const std::shared_ptr<UpdateParameters>&,
                       const RenderTree&,
-                      const TexturePool& texturePool);
+                      TexturePool& texturePool);
 
     void processChanges();
 

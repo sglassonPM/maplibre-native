@@ -5,6 +5,7 @@
 #include <mbgl/tile/tile_id.hpp>
 #include <mbgl/util/constants.hpp>
 #include <mbgl/util/range.hpp>
+#include <mbgl/map/mode.hpp>
 #include <mbgl/gfx/vertex_buffer.hpp>
 #include <mbgl/gfx/index_buffer.hpp>
 #include <mbgl/renderer/texture_pool.hpp>
@@ -64,9 +65,24 @@ public:
     static std::set<UnwrappedTileID> augmentWithFrustumCover(std::set<UnwrappedTileID> tiles,
                                                              const TransformState& state);
 
+    /// Ensemble des tuiles du terrain qui couvre le frustum, facon gl-js (coveringTiles) :
+    /// DFS quadtree testant l'AABB de chaque tuile — altitude DEM min/max incluse — contre le
+    /// frustum. Methode d'INSTANCE : elle lit l'etat stable (union monotone des plages
+    /// d'altitude via meshTileElevation) et applique l'hysteresis (meshTileLastVisible) pour
+    /// qu'une tuile deja visible ne clignote pas dehors quand son DEM se recharge. update()
+    /// l'appelle et publie le resultat dans lastRenderedMeshTiles ; renderer_impl le relit
+    /// (update() precede render() dans la meme frame -> drapage et maillage identiques).
+    std::set<UnwrappedTileID> computeMeshCover(const TransformState& state,
+                                               const UpdateParameters& updateParameters);
+
     /// Tuiles dessinees a la derniere frame (post-hysteresis) : renderer_impl garde leurs
     /// cibles de drapage pour eviter qu'une tuile encore visible perde son imagerie (gris).
     const std::set<UnwrappedTileID>& getLastRenderedMeshTiles() const { return lastRenderedMeshTiles; }
+
+    /// Cache d'union monotone des plages d'altitude (voir StableElevationProvider). Partage avec
+    /// RenderOrchestrator pour que le cover des SOURCES utilise la meme altitude que le maillage
+    /// terrain : les sources demandent alors au moins ce que le terrain drape (pas de trou magenta).
+    std::map<CanonicalTileID, Range<double>>& getElevationCache() { return meshTileElevation; }
 
     /**
      * @brief Update terrain rendering (create/update drawables)
@@ -81,7 +97,7 @@ public:
     void update(class RenderOrchestrator& orchestrator,
                 gfx::ShaderRegistry& shaders,
                 gfx::Context& context,
-                const TexturePool& texturePool,
+                TexturePool& texturePool,
                 const TransformState& state,
                 const std::shared_ptr<UpdateParameters>& updateParameters,
                 const RenderTree& renderTree,

@@ -229,18 +229,35 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
     // decide what is visible, not how finely it is subdivided. It also keeps this
     // change from perturbing tile selection on maps that have no terrain-shaped reason
     // to change.
+    // Marge XY (fraction de l'etendue du noeud) ajoutee a la boite AVANT le test de frustum : une
+    // tuile dont le corps est hors ecran mais qui deborde d'un mince liseré au bord (typiquement en
+    // bas a fort pitch) etait jugee « separee » et larguee -> liseré non rendu. En elargissant la
+    // boite de test, une telle tuile est conservee. N'affecte QUE le test de frustum (les heuristiques
+    // de LOD utilisent node.aabb) et s'applique a TOUTES les sources : terrain et imagerie gardent
+    // donc la meme tuile de bord (maillage ET drapage), pas de desaccord. Seul le test est elargi ;
+    // le maillage/placement reste inchange.
+    const auto withFrustumMargin = [&](AABB box) -> AABB {
+        constexpr double kEdgeMargin = 0.5;
+        const double mx = (box.max[0] - box.min[0]) * kEdgeMargin;
+        const double my = (box.max[1] - box.min[1]) * kEdgeMargin;
+        box.min[0] -= mx;
+        box.max[0] += mx;
+        box.min[1] -= my;
+        box.max[1] += my;
+        return box;
+    };
     const auto elevatedAABB = [&](const Node& node) -> AABB {
         if (!state.elevationProvider) {
-            return node.aabb;
+            return withFrustumMargin(node.aabb);
         }
         const auto range = state.elevationProvider->getTileElevationRange(CanonicalTileID(node.zoom, node.x, node.y));
         if (!range) {
-            return node.aabb; // no DEM loaded here yet: flat, as before
+            return withFrustumMargin(node.aabb); // no DEM loaded here yet: flat, as before
         }
         AABB elevated = node.aabb;
         elevated.min[2] = range->min * metersToTileUnits;
         elevated.max[2] = range->max * metersToTileUnits;
-        return elevated;
+        return withFrustumMargin(elevated);
     };
 
     // There should always be a certain number of maximum zoom level tiles
