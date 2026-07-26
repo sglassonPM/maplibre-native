@@ -2712,8 +2712,12 @@ public:
     CLLocationDegrees gestureSlopeAngle = [self angleBetweenPoints:self.dragGestureMiddlePoint
                                                           endPoint:middlePoint];
     self.dragGestureMiddlePoint = middlePoint;
-    if (fabs(fingerSlopeAngle) < MLNHorizontalTiltToleranceDegrees &&
-        fabs(gestureSlopeAngle) > 60.0) {
+    // Isomaps — geste d'inclinaison (2 doigts vers le haut/bas) rendu plus tolérant : l'amont
+    // exigeait des doigts quasi horizontaux (<45°) ET un glissement quasi vertical (>60°), d'où un
+    // geste qui « ne prend » qu'à la perfection. On élargit : doigts jusqu'à ~65° d'inclinaison,
+    // glissement à partir de ~40° de la verticale. Reste distinct du pinch (échelle) et de la
+    // rotation (angle des doigts qui change).
+    if (fabs(fingerSlopeAngle) < 65.0 && fabs(gestureSlopeAngle) > 40.0) {
       CGFloat gestureDistance = middlePoint.y;
       CGFloat slowdown = 2.0;
 
