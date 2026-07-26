@@ -1,6 +1,9 @@
 #include <mbgl/renderer/layers/symbol_layer_tweaker.hpp>
 
 #include <mbgl/gfx/context.hpp>
+#include <mbgl/gfx/texture2d.hpp>
+#include <mbgl/util/image.hpp>
+#include <cstring>
 #include <mbgl/gfx/drawable.hpp>
 #include <mbgl/gfx/renderable.hpp>
 #include <mbgl/gfx/renderer_backend.hpp>
@@ -179,6 +182,20 @@ void SymbolLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
                 idSymbolDEMTexture);
             // Packed terrain depth for occlusion (calculate_visibility)
             drawable.setTexture(parameters.terrain->getDepthTexture(context), idSymbolDepthTexture);
+        } else {
+            // Pas de terrain : lier une texture 1x1 aux slots DEM/profondeur, sinon le shader
+            // symbole (qui les declare toujours) fait echouer la validation Metal en Debug.
+            if (!placeholderTerrainTexture) {
+                auto image = std::make_shared<PremultipliedImage>(Size{1, 1});
+                std::memset(image->data.get(), 0, image->bytes());
+                placeholderTerrainTexture = context.createTexture2D();
+                placeholderTerrainTexture->setImage(image);
+                placeholderTerrainTexture->setSamplerConfiguration({.filter = gfx::TextureFilterType::Nearest,
+                                                                    .wrapU = gfx::TextureWrapType::Clamp,
+                                                                    .wrapV = gfx::TextureWrapType::Clamp});
+            }
+            drawable.setTexture(placeholderTerrainTexture, idSymbolDEMTexture);
+            drawable.setTexture(placeholderTerrainTexture, idSymbolDepthTexture);
         }
 
         // The terrain surface writes depth so its skirts get occluded; symbols

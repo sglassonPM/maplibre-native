@@ -6,8 +6,10 @@
 #include <mbgl/util/hash.hpp>
 
 #include <string>
+#include <memory>
 
 namespace mbgl {
+namespace gfx { class Texture2D; }
 
 /**
     Symbol layer specific tweaker
@@ -22,6 +24,12 @@ public:
 
 private:
     gfx::UniformBufferPtr evaluatedPropsUniformBuffer;
+
+    // Texture 1x1 liee aux slots DEM/profondeur des symboles quand il n'y a PAS de terrain :
+    // le shader symbole declare toujours demTexture/depthTexture + depthSampler (occlusion terrain),
+    // il faut donc lier quelque chose a ces slots meme sans terrain, sinon la validation Metal
+    // (Debug) echoue « missing Sampler binding ». dem_enabled=0 => la texture n'est jamais utilisee.
+    std::shared_ptr<gfx::Texture2D> placeholderTerrainTexture;
 
 #if MLN_UBO_CONSOLIDATION
     gfx::UniformBufferPtr drawableUniformBuffer;
