@@ -2322,6 +2322,13 @@ of north, the map will automatically snap to exact north.
  */
 - (void)addPluginLayerType:(Class)pluginLayerClass;
 
+/**
+ Isomaps — altitude du terrain 3D (mètres, exagération incluse) sous une coordonnée, échantillonnée
+ depuis le DEM du style terrain chargé. Renvoie `NAN` s'il n'y a pas de terrain actif (ou pas encore
+ de DEM chargé là). À appeler sur le thread principal. Sert à l'anti-collision caméra.
+ */
+- (double)isomapsTerrainElevationAtCoordinate:(CLLocationCoordinate2D)coordinate;
+
 @end
 
 NS_ASSUME_NONNULL_END

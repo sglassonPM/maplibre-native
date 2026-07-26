@@ -12,6 +12,8 @@
 #include <mbgl/renderer/dem_elevation_provider.hpp>
 #include <mbgl/renderer/render_terrain.hpp>
 #include <mbgl/renderer/update_parameters.hpp>
+#include <mbgl/util/tile_coordinate.hpp>
+#include <mbgl/util/constants.hpp>
 #include <mbgl/renderer/upload_parameters.hpp>
 #include <mbgl/renderer/pattern_atlas.hpp>
 #include <mbgl/renderer/paint_parameters.hpp>
@@ -754,6 +756,28 @@ std::vector<Feature> RenderOrchestrator::querySourceFeatures(const std::string& 
     if (!source) return {};
 
     return source->querySourceFeatures(options);
+}
+
+std::optional<double> RenderOrchestrator::queryTerrainElevation(const LatLng& latLng) const {
+    if (!renderTerrain || !renderTerrain->isEnabled()) {
+        return std::nullopt;
+    }
+    // Un zoom fin quelconque : getElevation retombe sur le DEM d'ancêtre réellement chargé, donc
+    // la valeur exacte du zoom n'importe pas tant qu'elle couvre la position.
+    constexpr uint8_t z = 14;
+    const TileCoordinate tc = TileCoordinate::fromLatLng(z, latLng.wrapped());
+    const auto tx = static_cast<int64_t>(std::floor(tc.p.x));
+    const auto ty = static_cast<int64_t>(std::floor(tc.p.y));
+    const int64_t n = int64_t(1) << z;
+    if (ty < 0 || ty >= n) {
+        return std::nullopt;
+    }
+    const UnwrappedTileID tileID(
+        0, CanonicalTileID(z, static_cast<uint32_t>(((tx % n) + n) % n), static_cast<uint32_t>(ty)));
+    const float x = static_cast<float>((tc.p.x - static_cast<double>(tx)) * util::EXTENT);
+    const float y = static_cast<float>((tc.p.y - static_cast<double>(ty)) * util::EXTENT);
+    // Exagération incluse : on veut la surface RENDUE, celle que l'œil peut traverser.
+    return static_cast<double>(renderTerrain->getElevationWithExaggeration(tileID, x, y));
 }
 
 FeatureExtensionValue RenderOrchestrator::queryFeatureExtensions(

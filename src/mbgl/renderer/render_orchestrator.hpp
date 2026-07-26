@@ -73,6 +73,11 @@ public:
 
     std::vector<Feature> queryRenderedFeatures(const ScreenLineString&, const RenderedQueryOptions&) const;
     std::vector<Feature> querySourceFeatures(const std::string& sourceID, const SourceQueryOptions&) const;
+
+    /// Altitude du terrain 3D (mètres, exagération incluse — la surface RENDUE) à une position,
+    /// échantillonnée depuis le DEM chargé côté CPU. nullopt si pas de terrain actif. Sert à
+    /// l'anti-collision caméra (empêcher l'œil de passer sous le relief), thread principal.
+    std::optional<double> queryTerrainElevation(const LatLng&) const;
     std::vector<Feature> queryShapeAnnotations(const ScreenLineString&) const;
 
     FeatureExtensionValue queryFeatureExtensions(const std::string& sourceID,

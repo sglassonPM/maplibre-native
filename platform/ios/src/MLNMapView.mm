@@ -651,6 +651,19 @@ public:
   return _rendererFrontend->getRenderer();
 }
 
+- (double)isomapsTerrainElevationAtCoordinate:(CLLocationCoordinate2D)coordinate {
+  if (!_rendererFrontend) {
+    return NAN;
+  }
+  mbgl::Renderer *renderer = _rendererFrontend->getRenderer();
+  if (!renderer) {
+    return NAN;
+  }
+  std::optional<double> elevation =
+      renderer->queryTerrainElevation(MLNLatLngFromLocationCoordinate2D(coordinate));
+  return elevation ? *elevation : NAN;
+}
+
 - (void)commonInitWithOptions:(MLNMapOptions *)mlnMapoptions {
   if (mlnMapoptions == nil) {
     mlnMapoptions = [[MLNMapOptions alloc] init];

@@ -59,6 +59,11 @@ public:
                                                const RenderedQueryOptions& options = {}) const;
     std::vector<Feature> queryRenderedFeatures(const ScreenBox& box, const RenderedQueryOptions& options = {}) const;
     std::vector<Feature> querySourceFeatures(const std::string& sourceID, const SourceQueryOptions& options = {}) const;
+
+    /// Altitude du terrain 3D (m, exagération incluse) à une coordonnée, ou nullopt si pas de
+    /// terrain actif. Échantillonnée depuis le DEM CPU sur le thread appelant (= thread de rendu).
+    std::optional<double> queryTerrainElevation(const LatLng&) const;
+
     AnnotationIDs queryPointAnnotations(const ScreenBox& box) const;
     AnnotationIDs queryShapeAnnotations(const ScreenBox& box) const;
     AnnotationIDs getAnnotationIDs(const std::vector<Feature>&) const;
