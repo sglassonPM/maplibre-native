@@ -1,4 +1,5 @@
 #import "MLNStyle_Private.h"
+#include <mbgl/style/terrain.hpp>
 
 #import "MLNBackgroundStyleLayer.h"
 #import "MLNCircleStyleLayer.h"
@@ -153,6 +154,17 @@ const MLNExceptionName MLNRedundantSourceIdentifierException =
 
 - (void)setStyleJSON:(NSString *)styleJSON {
   self.rawStyle->loadJSON([styleJSON UTF8String]);
+}
+
+// MARK: Terrain 3D (Isomaps)
+
+- (void)isomapsSetTerrainSource:(NSString *)sourceIdentifier exaggeration:(double)exaggeration {
+  self.rawStyle->setTerrain(std::make_unique<mbgl::style::Terrain>(
+      std::string([sourceIdentifier UTF8String]), static_cast<float>(exaggeration)));
+}
+
+- (void)isomapsRemoveTerrain {
+  self.rawStyle->setTerrain(nullptr);
 }
 
 // MARK: Sources

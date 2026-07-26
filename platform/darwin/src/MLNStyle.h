@@ -301,6 +301,22 @@ MLN_EXPORT
  */
 - (void)localizeLabelsIntoLocale:(nullable NSLocale *)locale;
 
+#pragma mark Terrain 3D (Isomaps)
+
+/**
+ Isomaps — active le terrain 3D à l'exécution : draine les couches sur le relief fourni par une
+ source `raster-dem` déjà ajoutée au style. Équivalent de la clé `"terrain"` du style JSON, mais
+ applicable après chargement (le SDK n'a pas d'autre API terrain). Ajoutez d'abord la
+ `MLNRasterDEMSource` correspondante, puis appelez cette méthode.
+
+ @param sourceIdentifier Identifiant de la source `raster-dem` (élévation).
+ @param exaggeration Multiplicateur d'exagération du relief (1.0 = échelle réelle).
+ */
+- (void)isomapsSetTerrainSource:(NSString *)sourceIdentifier exaggeration:(double)exaggeration;
+
+/** Isomaps — désactive le terrain 3D (revient à un rendu plat). */
+- (void)isomapsRemoveTerrain;
+
 @end
 
 /**
