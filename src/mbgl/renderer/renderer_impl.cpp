@@ -245,7 +245,14 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
         for (const auto& renderTile : *renderTiles) {
             renderTileIDs.insert(renderTile.id);
         }
-        const std::set<UnwrappedTileID> demTileIDs = RenderTerrain::expandToDeepestCover(renderTileIDs);
+        renderTileIDs = RenderTerrain::augmentWithFrustumCover(std::move(renderTileIDs), state);
+        std::set<UnwrappedTileID> demTileIDs = RenderTerrain::expandToDeepestCover(renderTileIDs);
+        // Hysteresis de drapage : garder aussi les cibles des tuiles que le terrain dessinait
+        // encore a la derniere frame (post-hysteresis du maillage). Sinon une tuile retenue
+        // cote maillage perd son imagerie des qu'elle sort du calcul brut -> zone grise en pan.
+        for (const auto& id : terrain->getLastRenderedMeshTiles()) {
+            demTileIDs.insert(id);
+        }
         for (const auto& id : demTileIDs) {
             texturePool.createRenderTarget(context, id, renderTreeParameters.backgroundColor);
         }

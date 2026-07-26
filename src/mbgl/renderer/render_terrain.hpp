@@ -60,6 +60,14 @@ public:
     /// to ancestors while tiles load.
     static std::set<UnwrappedTileID> expandToDeepestCover(const std::set<UnwrappedTileID>& tileIDs);
 
+    /// Union des tuiles source avec la couverture frustum (remplit les coins non couverts).
+    static std::set<UnwrappedTileID> augmentWithFrustumCover(std::set<UnwrappedTileID> tiles,
+                                                             const TransformState& state);
+
+    /// Tuiles dessinees a la derniere frame (post-hysteresis) : renderer_impl garde leurs
+    /// cibles de drapage pour eviter qu'une tuile encore visible perde son imagerie (gris).
+    const std::set<UnwrappedTileID>& getLastRenderedMeshTiles() const { return lastRenderedMeshTiles; }
+
     /**
      * @brief Update terrain rendering (create/update drawables)
      * @param orchestrator Render orchestrator for accessing render sources
@@ -265,6 +273,10 @@ private:
     // charge (sa plage d'altitude change) ; on la garde quelques frames apres sa derniere
     // apparition pour casser l'oscillation.
     std::map<UnwrappedTileID, uint64_t> meshTileLastVisible;
+
+    // Dernier ensemble de tuiles reellement dessine (post-hysteresis), pour que
+    // renderer_impl garde leurs cibles de drapage synchronisees avec le maillage.
+    std::set<UnwrappedTileID> lastRenderedMeshTiles;
 
     // Plage d'altitude la plus large vue par tuile — union monotone, pour un cull stable
     std::map<CanonicalTileID, Range<double>> meshTileElevation;

@@ -68,6 +68,47 @@ RenderTerrain::RenderTerrain(Immutable<style::Terrain::Impl> impl_)
 
 RenderTerrain::~RenderTerrain() = default;
 
+std::set<UnwrappedTileID> RenderTerrain::augmentWithFrustumCover(std::set<UnwrappedTileID> tiles,
+                                                                const TransformState& state) {
+    // La source DEM ne couvre pas toujours tout le frustum visible (coins de l'ecran a
+    // fort pitch) : on ajoute les tuiles du frustum qu'elle a ratees, remplies par le DEM
+    // d'ancetre dans la boucle de creation. Les cibles de drapage doivent etre creees pour
+    // le meme ensemble (voir renderer_impl), sinon la tuile ajoutee est sautee.
+    uint8_t maxZ = 0;
+    for (const auto& id : tiles) {
+        maxZ = std::max(maxZ, id.canonical.z);
+    }
+    if (maxZ == 0) {
+        return tiles;
+    }
+    const auto frustum = util::tileCover({.transformState = state}, maxZ, Range<uint8_t>(0, maxZ));
+    std::set<UnwrappedTileID> cover;
+    for (const auto& oid : frustum) {
+        cover.insert(UnwrappedTileID(oid.wrap, oid.canonical));
+    }
+    // Dilatation d'un cran : tileCover peut rater le tout dernier bord (coin bas de l'ecran
+    // a fort pitch). On ajoute les voisins 8 de chaque tuile couverte pour que les coins
+    // deviennent candidats ; le frustum cull retire ensuite ce qui est vraiment hors champ.
+    for (const auto& id : cover) {
+        tiles.insert(id);
+        const int z = static_cast<int>(id.canonical.z);
+        const int n = 1 << z;
+        for (int dx = -1; dx <= 1; ++dx) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                const int ny = static_cast<int>(id.canonical.y) + dy;
+                if (ny < 0 || ny >= n) {
+                    continue;
+                }
+                const int nx = ((static_cast<int>(id.canonical.x) + dx) % n + n) % n;
+                tiles.insert(UnwrappedTileID(id.wrap, CanonicalTileID(static_cast<uint8_t>(z),
+                                                                      static_cast<uint32_t>(nx),
+                                                                      static_cast<uint32_t>(ny))));
+            }
+        }
+    }
+    return tiles;
+}
+
 std::set<UnwrappedTileID> RenderTerrain::expandToDeepestCover(const std::set<UnwrappedTileID>& tileIDs) {
     std::set<UnwrappedTileID> out;
     const std::function<void(const UnwrappedTileID&)> insert = [&](const UnwrappedTileID& id) {
@@ -185,6 +226,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     for (const auto& renderTile : *renderTiles) {
         renderTileIDs.insert(renderTile.id);
     }
+    renderTileIDs = augmentWithFrustumCover(std::move(renderTileIDs), state);
     std::set<UnwrappedTileID> meshTiles = expandToDeepestCover(renderTileIDs);
 
     // Drop mesh tiles that fall outside the view. A sparse DEM contributes large
@@ -223,7 +265,35 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         StableElevationProvider elevationProvider(demSource, getExaggeration(), meshTileElevation);
         const util::TileCoverParameters cullParams{.transformState = state, .elevationProvider = &elevationProvider};
         const auto candidates = meshTiles; // avant cull : univers de retention
-        const auto visible = util::frustumCull(cullParams, meshTiles);
+        const auto culled = util::frustumCull(cullParams, meshTiles);
+
+        // Marge d'un cran : le frustum cull et la couverture (tileCover) ne s'accordent pas
+        // exactement aux coins de l'ecran, si bien qu'une tuile encore visible dans un coin est
+        // rejetee (zone grise). On garde, en plus des tuiles retenues par le cull, toute
+        // candidate ADJACENTE (meme zoom, voisinage 8) a une tuile visible.
+        std::set<UnwrappedTileID> visible = culled;
+        for (const auto& v : culled) {
+            const int z = static_cast<int>(v.canonical.z);
+            const int n = 1 << z;
+            for (int dx = -1; dx <= 1; ++dx) {
+                for (int dy = -1; dy <= 1; ++dy) {
+                    if (dx == 0 && dy == 0) {
+                        continue;
+                    }
+                    const int ny = static_cast<int>(v.canonical.y) + dy;
+                    if (ny < 0 || ny >= n) {
+                        continue;
+                    }
+                    const int nx = ((static_cast<int>(v.canonical.x) + dx) % n + n) % n;
+                    const UnwrappedTileID neighbour(
+                        v.wrap, CanonicalTileID(static_cast<uint8_t>(z), static_cast<uint32_t>(nx),
+                                                static_cast<uint32_t>(ny)));
+                    if (candidates.contains(neighbour)) {
+                        visible.insert(neighbour);
+                    }
+                }
+            }
+        }
 
         // Hysteresis : marquer les tuiles visibles cette frame, puis garder toute
         // candidate vue au cours des kRetentionFrames dernieres. Une tuile qui clignote
@@ -250,6 +320,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         }
         const auto before = candidates.size();
         meshTiles = std::move(retained);
+        lastRenderedMeshTiles = meshTiles;
     }
 
     // Drop drawables and cached DEM textures for tiles that left the mesh tile
