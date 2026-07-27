@@ -248,7 +248,12 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
     };
     const auto elevatedAABB = [&](const Node& node) -> AABB {
         if (!state.elevationProvider) {
-            return withFrustumMargin(node.aabb);
+            // Pas de terrain (carte plate/vectorielle) : couverture IDENTIQUE a l'amont, SANS marge.
+            // La marge n'existe que pour le raccord terrain<->drapage au bord bas a fort pitch ; hors
+            // terrain elle ne fait qu'elargir le cover a TOUTES les sources (~x1.75 tuiles), ce qui
+            // multiplie la geometrie de lignes des styles vectoriels (165 calques) -> OOM sur device
+            // (satellite raster epargne). Constate au profilage (LineBucket::addFeature ~1.3 Go).
+            return node.aabb;
         }
         const auto range = state.elevationProvider->getTileElevationRange(CanonicalTileID(node.zoom, node.x, node.y));
         if (!range) {
