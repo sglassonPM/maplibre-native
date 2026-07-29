@@ -13,6 +13,7 @@
 #include <cmath>
 #include <functional>
 #include <optional>
+#include <unordered_map>
 
 namespace mbgl {
 
@@ -156,6 +157,10 @@ private:
     // → NUL une frame sur deux). On retient le max récent et on le laisse décroître lentement → contrainte
     // CONTINUE (comble les trous, garde l'œil au-dessus le temps de franchir un relief qu'on vient de voir).
     double collisionRefGroundHold = 0.0;
+    // Mémoire d'élévation : le terrain sous l'œil est souvent hors frustum (non chargé → requête = 0). On
+    // retient le MAX vu par cellule spatiale (~100 m) quand il ÉTAIT chargé (à l'écran) ; on le ressort en
+    // secours quand la requête live échoue → tout relief approché récemment protège l'œil (le sol est fixe).
+    std::unordered_map<int64_t, float> collisionElevCache;
 
     // Remonte l'œil s'il passe sous terrainCollisionMinAGL m au-dessus du sol (décalage rigide via
     // centerAltitude, auto-restauré car la caméra ré-applique l'altitude naturelle à chaque frame).

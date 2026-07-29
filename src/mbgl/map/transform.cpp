@@ -784,48 +784,60 @@ void Transform::clampEyeAboveTerrain() {
     const double mLat = (center.latitude() - eyeLL.latitude()) * 111320.0;
     const double mLng = (center.longitude() - eyeLL.longitude()) * 111320.0 * cosLat;
     const double distEC = std::sqrt(mLat * mLat + mLng * mLng);
+    if (collisionElevCache.size() > 200000) {
+        collisionElevCache.clear(); // filet mémoire ; l'élévation est fixe → se re-remplit vite
+    }
     std::optional<double> refGround;
     const auto accMax = [&refGround](const std::optional<double>& e) {
         if (e && *e > 1.0 && (!refGround || *e > *refGround)) refGround = e; // >1 m : ignore le 0 hors-frustum
     };
-    const double dLat = 200.0 / 111320.0;
-    const double dLng = 200.0 / (111320.0 * cosLat);
-    const auto sampleCircle = [&](const LatLng& p) {
-        accMax(terrainCollisionElevationFn(p));
-        for (int i = 0; i < 8; ++i) {
-            const double a = static_cast<double>(i) * (kPi / 4.0);
-            accMax(terrainCollisionElevationFn(
-                LatLng(p.latitude() + dLat * std::sin(a), p.longitude() + dLng * std::cos(a))));
+    // Échantillon AVEC mémoire : max(requête live, hauteur mémorisée de la cellule ~100 m) ; on mémorise le
+    // max. Ainsi un terrain vu récemment (chargé) reste connu quand l'œil passe dessus/derrière (hors frustum).
+    const auto sampleElev = [&](const LatLng& p) -> std::optional<double> {
+        const int64_t latC = static_cast<int64_t>(std::llround(p.latitude() / 0.001));
+        const int64_t lngC = static_cast<int64_t>(std::llround(p.longitude() / 0.0015));
+        const int64_t key = latC * 4000000LL + lngC;
+        const std::optional<double> live = terrainCollisionElevationFn(p);
+        double best = (live && *live > 1.0) ? *live : -1.0;
+        const auto it = collisionElevCache.find(key);
+        if (it != collisionElevCache.end() && static_cast<double>(it->second) > best) {
+            best = static_cast<double>(it->second);
         }
+        if (best > 1.0) {
+            collisionElevCache[key] = static_cast<float>(best);
+            return best;
+        }
+        return live;
     };
-    // Look-at PROCHE (< 3 km : vue plongeante / zoom avant) = le terrain DROIT SOUS toi, chargé (dans le
-    // frustum). Indispensable au zoom : la sonde œil→centre a une portée nulle quand le centre est très
-    // proche (distEC < 300 m) → sans ça refGround=NUL pendant le zoom et l'œil plonge dans le sol. Couvre
-    // aussi le regard ~vertical (distEC ≈ 0).
+    // 1) REMPLIR la mémoire avec le terrain VISIBLE (centre proche + le long du regard), SANS l'utiliser pour
+    // la contrainte : ainsi, quand l'œil arrivera à l'aplomb de ce relief (devenu hors frustum), sa hauteur
+    // sera déjà connue. L'inclure directement dans la contrainte ferait monter l'œil AVANT d'y être = bond.
     if (distEC <= 3000.0) {
-        sampleCircle(center);
+        (void)sampleElev(center);
     }
     if (distEC > 1.0) {
-        // Le terrain juste sous l'œil est HORS FRUSTUM (non chargé → 0). On cherche le terrain VISIBLE le
-        // plus proche (1er point chargé le long du regard œil→centre), puis on échantillonne ~1,5 km au-delà :
-        // c'est le relief sous la trajectoire PROCHE. Ni le sommet lointain (→ bond de l'œil), ni du non-chargé.
         const double ux = mLng / distEC, uy = mLat / distEC;
-        const auto pointAhead = [&](double d) {
-            return LatLng(eyeLL.latitude() + uy * d / 111320.0, eyeLL.longitude() + ux * d / (111320.0 * cosLat));
-        };
-        double d0 = -1.0;
-        for (double d = 300.0; d <= 6000.0 && d <= distEC; d += 300.0) {
-            const auto e = terrainCollisionElevationFn(pointAhead(d));
-            if (e && *e > 1.0) {
-                d0 = d;
-                break;
-            }
+        for (double d = 300.0; d <= 3000.0 && d <= distEC; d += 300.0) {
+            (void)sampleElev(LatLng(eyeLL.latitude() + uy * d / 111320.0,
+                                    eyeLL.longitude() + ux * d / (111320.0 * cosLat)));
         }
-        if (d0 > 0.0) {
-            for (double d = d0; d <= d0 + 1500.0 && d <= distEC; d += 250.0) {
-                sampleCircle(pointAhead(d));
-            }
-        }
+    }
+    // 2) CONTRAINTE = terrain DIRECTEMENT SOUS L'ŒIL (« le sol »), via la mémoire (souvent hors frustum).
+    // Petit cercle 120 m pour une falaise/aiguille juste à l'aplomb. minEye = sol + 300 → l'œil se FIGE là
+    // quand on descend, SANS rebondir : la référence est le sol STABLE sous l'œil, pas le max d'une large
+    // zone (qui attrapait un sommet voisin et repoussait l'œil au-dessus de lui = rebond).
+    const double dLat = 120.0 / 111320.0;
+    const double dLng = 120.0 / (111320.0 * cosLat);
+    accMax(sampleElev(eyeLL));
+    for (int i = 0; i < 8; ++i) {
+        const double a = static_cast<double>(i) * (kPi / 4.0);
+        accMax(sampleElev(LatLng(eyeLL.latitude() + dLat * std::sin(a), eyeLL.longitude() + dLng * std::cos(a))));
+    }
+    // Filet « vue fraîche » : si le sol sous l'œil est encore inconnu (œil derrière le frustum, mémoire pas
+    // remplie là), on retombe sur le terrain du CENTRE (chargé) — moins précis mais évite de plonger dans le
+    // sol au tout premier zoom avant d'avoir bougé.
+    if (!refGround && distEC <= 3000.0) {
+        accMax(sampleElev(center));
     }
     // Maintien avec décroissance : monte instantanément au max sondé, décroît ~2 %/appel vers le sample
     // courant (ou 0 si NUL) → contrainte CONTINUE malgré les trous NUL de la sonde (terrain hors frustum).
