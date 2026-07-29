@@ -352,9 +352,12 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
             // distance : ~z14 à 2 km, ~z11 à 21 km, quelle que soit l'altitude de l'œil. Constante à régler.
             if (state.elevationProvider) {
                 // distanceToTileMercator ≈ distance_mercator[0,1] / 512 → -log2 est décalé de +9 ; avec
-                // l'offset visé (~+0,6) la constante nette est ≈ -8,4. Donne ~z14 à 2 km, ~z11 à 21 km.
+                // l'offset visé la constante nette règle la NETTETÉ du sol par distance. -4.4 → ~z16 à 2 km,
+                // ~z13 à 21 km : sol net à pitch (le mid-ground à 1-2 km n'est plus plafonné z14). Sûr en
+                // altitude : au-dessus de ~2 km le plafond par ALTITUDE (altCap) domine → pas d'explosion en
+                // vue haute ; ne mord qu'en vue basse (œil < 2 km) où la finesse est justement voulue.
                 const double tileDistMaxZoom =
-                    -std::log2(std::max(1e-9, distanceToTileMercator)) - 6.4;
+                    -std::log2(std::max(1e-9, distanceToTileMercator)) - 4.4;
                 if (static_cast<double>(node.zoom) + 1.0 > tileDistMaxZoom) shouldSplitTile = false;
             }
         } else {

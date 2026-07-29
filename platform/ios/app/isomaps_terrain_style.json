@@ -87,7 +87,7 @@
       "type": "raster",
       "attribution": "© Isomaps, MapTiler",
       "minzoom": 0,
-      "maxzoom": 14,
+      "maxzoom": 20,
       "tileSize": 256,
       "tiles": [
         "https://api.maptiler.com/maps/satellite-v4/256/{z}/{x}/{y}@2x.webp?key=J7FRYBWhpMIw5Eh5pZOz"
