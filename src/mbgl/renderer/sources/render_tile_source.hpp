@@ -28,6 +28,10 @@ public:
     RenderTiles getRenderTilesSortedByYPosition() const override;
     const Tile* getRenderedTile(const UnwrappedTileID&) const override;
     Immutable<std::vector<RenderTile>> getRawRenderTiles() const override { return renderTiles; }
+    // Isomaps : toutes les tuiles chargées de la pyramide (rendues + retenues non-rendues, ex. aperçu DEM).
+    const std::map<OverscaledTileID, std::unique_ptr<Tile>>* getLoadedTiles() const override {
+        return &tilePyramid.getTiles();
+    }
 
     std::unordered_map<std::string, std::vector<Feature>> queryRenderedFeatures(
         const ScreenLineString& geometry,

@@ -79,6 +79,10 @@ public:
     virtual const ImageSourceRenderData* getImageRenderData() const { return nullptr; }
     virtual const Tile* getRenderedTile(const UnwrappedTileID&) const { return nullptr; }
     virtual Immutable<std::vector<RenderTile>> getRawRenderTiles() const;
+    // Isomaps : TOUTES les tuiles CHARGÉES (pyramide), pas seulement les rendues (frustum) — pour interroger
+    // l'élévation hors écran (aperçu grossier DEM retenu, cf. TilePyramid). nullptr par défaut ; surchargé
+    // par RenderTileSource. Sert à l'anti-collision caméra (getElevation).
+    virtual const std::map<OverscaledTileID, std::unique_ptr<Tile>>* getLoadedTiles() const { return nullptr; }
 
     virtual std::unordered_map<std::string, std::vector<Feature>> queryRenderedFeatures(
         const ScreenLineString& geometry,

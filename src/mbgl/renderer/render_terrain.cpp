@@ -683,38 +683,41 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID, float x, float 
     // On prend la tuile DEM chargée la PLUS FINE qui CONTIENT le point — ancêtre OU plus fine. L'ancien
     // test (isChildOf) ne matchait QUE les ancêtres → renvoyait 0 dès que seules des tuiles PLUS FINES que
     // la requête étaient chargées (ex. au zoom avant : z16 chargées, requête z14 → 0 → collision qui lâche).
-    const auto renderTiles = demSource->getRawRenderTiles();
-    const RenderTile* demRenderTile = nullptr;
+    // On lit les tuiles CHARGÉES de la pyramide (pas seulement les rendues/frustum) : indispensable à
+    // l'anti-collision, qui interroge le terrain HORS ÉCRAN (aperçu grossier DEM retenu, cf. TilePyramid).
+    // On prend la PLUS FINE tuile DEM qui CONTIENT le point ET a des données DEM valides.
+    const auto* loadedTiles = demSource->getLoadedTiles();
+    if (!loadedTiles) {
+        return 0.0f;
+    }
+    RasterDEMTile* demTile = nullptr;
+    CanonicalTileID demC(0, 0, 0);
     int bestZoom = -1;
-    for (const auto& renderTile : *renderTiles) {
-        const auto& c = renderTile.id.canonical;
-        const double nC = static_cast<double>(1ull << c.z);
-        if (gx >= c.x / nC && gx < (c.x + 1) / nC && gy >= c.y / nC && gy < (c.y + 1) / nC &&
-            static_cast<int>(c.z) > bestZoom) {
-            bestZoom = c.z;
-            demRenderTile = &renderTile;
+    for (const auto& entry : *loadedTiles) {
+        Tile* t = entry.second.get();
+        if (!t || t->kind != Tile::Kind::RasterDEM) {
+            continue;
         }
+        const auto& c = entry.first.canonical;
+        const double nC = static_cast<double>(1ull << c.z);
+        if (!(gx >= c.x / nC && gx < (c.x + 1) / nC && gy >= c.y / nC && gy < (c.y + 1) / nC) ||
+            static_cast<int>(c.z) <= bestZoom) {
+            continue;
+        }
+        auto* candBucket = static_cast<RasterDEMTile*>(t)->getBucket();
+        if (!candBucket || !candBucket->getDEMData().getImagePtr() || candBucket->getDEMData().dim <= 0) {
+            continue;
+        }
+        bestZoom = static_cast<int>(c.z);
+        demTile = static_cast<RasterDEMTile*>(t);
+        demC = c;
     }
-    if (!demRenderTile) {
+    if (!demTile) {
         return 0.0f;
     }
-
-    const auto& tile = demRenderTile->getTile();
-    if (tile.kind != Tile::Kind::RasterDEM) {
-        return 0.0f;
-    }
-    auto* demTile = const_cast<RasterDEMTile*>(static_cast<const RasterDEMTile*>(&tile));
-    auto* bucket = demTile->getBucket();
-    if (!bucket) {
-        return 0.0f;
-    }
-    const auto& demData = bucket->getDEMData();
-    if (!demData.getImagePtr() || demData.dim <= 0) {
-        return 0.0f;
-    }
+    const auto& demData = demTile->getBucket()->getDEMData();
 
     // Sous-position [0,1[ du point dans la tuile DEM trouvée (ancêtre ou fine, peu importe).
-    const auto& demC = demRenderTile->id.canonical;
     const double nD = static_cast<double>(1ull << demC.z);
     const double subX = gx * nD - static_cast<double>(demC.x);
     const double subY = gy * nD - static_cast<double>(demC.y);

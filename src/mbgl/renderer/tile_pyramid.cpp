@@ -109,6 +109,7 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
 
     std::vector<OverscaledTileID> idealTiles;
     std::vector<OverscaledTileID> panTiles;
+    std::vector<OverscaledTileID> overviewTiles; // Isomaps : aperçu DEM grossier retenu (anti-collision)
 
     util::TileCoverParameters tileCoverParameters = {.transformState = parameters.transformState,
                                                      .tileLodMinRadius = parameters.tileLodMinRadius,
@@ -148,6 +149,18 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
                                "Provided camera options returned " + std::to_string(idealTiles.size()) +
                                    " tiles, only " + util::toString(idealTiles[0]) + " is taken in Tile mode.");
             idealTiles = {idealTiles[0]};
+        }
+
+        // Isomaps : aperçu grossier TOUJOURS retenu (chargé, NON rendu) pour l'anti-collision caméra. Le
+        // terrain hors frustum (sous/derrière l'œil, ou vers où on pane) doit rester interrogeable en
+        // élévation. z7 = tuiles ~200 km, résolution ~km : une poignée couvre toute la région, coût
+        // négligeable. tileCover à z7 renvoie la/les tuile(s) grossière(s) couvrant le frustum → large zone
+        // autour de la caméra. Seulement si c'est plus grossier que l'idéal (sinon inutile).
+        if (type == SourceType::RasterDEM) {
+            constexpr int32_t overviewZoom = 10; // ~150 m/px : assez fin pour ne pas moyenner un sommet vers
+            if (overviewZoom >= static_cast<int32_t>(zoomRange.min) && overviewZoom < idealZoom) {
+                overviewTiles = util::tileCover(tileCoverParameters, overviewZoom, zoomRange); // le bas (clip)
+            }
         }
     }
 
@@ -214,6 +227,20 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
             retainTileFn,
             [](const UnwrappedTileID&, Tile&) {},
             panTiles,
+            emptyPrefetchedTiles,
+            zoomRange,
+            maxParentTileOverscaleFactor);
+    }
+
+    // Isomaps : charge + RETIENT l'aperçu grossier DEM (anti-collision), NON rendu (renderTileFn vide) — on
+    // ne veut surtout pas draper une tuile z7 mondiale (OOM). Interrogé via getLoadedTiles() dans getElevation.
+    if (!overviewTiles.empty()) {
+        algorithm::updateRenderables(
+            getTileFn,
+            createTileFn,
+            retainTileFn,
+            [](const UnwrappedTileID&, Tile&) {},
+            overviewTiles,
             emptyPrefetchedTiles,
             zoomRange,
             maxParentTileOverscaleFactor);
