@@ -44,7 +44,7 @@
 #include <functional>
 #include <unordered_set>
 
-// 🧪 Isomaps DIAG (à retirer) — compteurs de tuiles exposés au HUD du harness via accesseurs C.
+// Isomaps : compteurs de tuiles (maillage / basemap) exposés au HUD de l'app d'éval via accesseurs C.
 namespace {
 std::atomic<int> g_isomapsMeshTiles{0};
 std::atomic<int> g_isomapsSatTiles{0};
@@ -419,29 +419,6 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     lastRenderedMeshTiles = meshTiles;
     g_isomapsMeshTiles.store(static_cast<int>(meshTiles.size()), std::memory_order_relaxed);
     g_isomapsSatTiles.store(static_cast<int>(basemapTextures.size()), std::memory_order_relaxed);
-
-    // 🧪 DIAG (à retirer) — aligne-t-on maillage et satellite ? Si zoom max maillage >> zoom max
-    // satellite chargé, le premier plan sample un ancêtre grossier = flou.
-    if (basemapSource && (demUpdateCounter % 30 == 0)) {
-        std::array<int, 24> meshZ{}, satZ{}; // histogrammes par zoom
-        for (const auto& id : meshTiles) {
-            const int z = static_cast<int>(id.canonical.z);
-            if (z >= 0 && z < 24) ++meshZ[z];
-        }
-        for (const auto& [id, tex] : basemapTextures) {
-            const int z = static_cast<int>(id.canonical.z);
-            if (z >= 0 && z < 24) ++satZ[z];
-        }
-        const auto fmt = [](const std::array<int, 24>& a) {
-            std::string s;
-            for (int z = 23; z >= 0; --z)
-                if (a[z] > 0) s += " z" + util::toString(z) + ":" + util::toString(a[z]);
-            return s;
-        };
-        Log::Warning(Event::Render,
-                     "🧪 DIAG MAILLAGE n=" + util::toString(meshTiles.size()) + " |" + fmt(meshZ) +
-                         "  ||  SATELLITE chargé n=" + util::toString(basemapTextures.size()) + " |" + fmt(satZ));
-    }
 
     // Drop drawables and cached DEM textures for tiles that left the mesh tile
     // set, keeping everything else intact between frames

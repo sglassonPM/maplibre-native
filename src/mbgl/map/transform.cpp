@@ -839,44 +839,45 @@ void Transform::clampEyeAboveTerrain() {
     if (!refGround && distEC <= 3000.0) {
         accMax(sampleElev(center));
     }
-    // Maintien avec décroissance : monte instantanément au max sondé, décroît ~2 %/appel vers le sample
-    // courant (ou 0 si NUL) → contrainte CONTINUE malgré les trous NUL de la sonde (terrain hors frustum).
+    // Maintien : monte INSTANTANÉMENT au max sondé. DESCENTE : RAPIDE (35 %/appel) quand le terrain sous
+    // l'œil est CONNU (refGround non NUL) — on survole un sol plus bas fiable, il FAUT redescendre vite,
+    // sinon l'œil reste bridé à la hauteur d'un sommet franchi (« figé trop haut » → à fort zoom la vue se
+    // casse en un coin de terrain + fond magenta). LENTE (2 %/appel) seulement quand refGround est NUL
+    // (terrain hors frustum, inconnu) : on garde la sécurité anti-plongée le temps que la sonde retrouve le sol.
     if (refGround && *refGround > collisionRefGroundHold) {
         collisionRefGroundHold = *refGround;
     }
     const double decayTarget = refGround ? *refGround : 0.0;
+    const double decayRate = refGround ? 0.35 : 0.02;
     if (collisionRefGroundHold > decayTarget) {
-        collisionRefGroundHold -= (collisionRefGroundHold - decayTarget) * 0.02;
+        collisionRefGroundHold -= (collisionRefGroundHold - decayTarget) * decayRate;
     }
-    // 🧪 DIAG collision (à retirer)
-    static int isoCollDiag = 0;
-    if ((isoCollDiag++ % 30) == 0) {
-        Log::Warning(Event::General,
-                     "🏔️ COLLISION eyeAlt=" + std::to_string(static_cast<int>(loc->altitude)) + " refGround=" +
-                         (refGround ? std::to_string(static_cast<int>(*refGround)) : std::string("NUL")) +
-                         " hold=" + std::to_string(static_cast<int>(collisionRefGroundHold)) +
-                         " centerAlt=" + std::to_string(static_cast<int>(state.getCenterAltitude())));
+    // Relâche tout centerAltitude résiduel vers 0 : l'ANCIENNE approche flottait centerAltitude pour lever
+    // l'œil, ce qui DÉCOUPLE zoom et vue (le point regardé finit en l'air au-dessus du terrain → à fort zoom
+    // le frustum étroit ne croise le sol que sur un coin → reste = fond magenta). On n'y touche plus ; le
+    // relief est porté par le DEM. centerAltitude doit rester 0.
+    if (state.getCenterAltitude() > 0.01) {
+        const double relaxed = state.getCenterAltitude() * 0.5;
+        state.setCenterAltitude(relaxed > 0.5 ? relaxed : 0.0);
     }
     if (collisionRefGroundHold < 1.0) {
         return; // aucun terrain vu récemment → pas de contrainte
     }
     const double minEyeAlt = collisionRefGroundHold + terrainCollisionMinAGL;
-    // eyeOffset = altitude de l'ŒIL AU-DESSUS du centre. L'œil = centre + offset(zoom,pitch,fov), donc cet
-    // offset est INDÉPENDANT de centerAltitude → le centerAltitude requis est ABSOLU (pas lié à l'historique)
-    // → aucune accumulation, même si un geste reporte centerAltitude via value_or(current) (cf. easeTo).
-    const double eyeOffset = loc->altitude - state.getCenterAltitude();
-    const double requiredCenterAlt = minEyeAlt - eyeOffset;
-    // Plancher naturel = 0 (l'app ne pilote pas centerAltitude ; le relief est rendu via le DEM, pas via le
-    // centre). On IMPOSE centerAltitude = max(0, requis) : décalage rigide du rig vers le haut quand l'œil
-    // serait sous le sol + minAGL (marche à tous les pitchs, y compris >90° où l'œil est sous le centre), et
-    // RETOUR à 0 dès que la contrainte ne s'applique plus → idempotent, auto-restauré, sans dérive.
-    const double target = requiredCenterAlt > 0.0 ? requiredCenterAlt : 0.0;
-    const double cur = state.getCenterAltitude();
-    // Monte INSTANTANÉMENT (sécurité anti-pénétration quand le relief se dresse) mais DESCEND en douceur
-    // (~10 %/appel ≈ 0,4 s) pour ne pas retomber d'un coup dans un sommet qu'on vient de franchir.
-    const double newAlt = target >= cur ? target : cur + (target - cur) * 0.1;
-    if (std::abs(newAlt - cur) > 0.01) {
-        state.setCenterAltitude(newAlt);
+    // BRIDAGE DU ZOOM (remplace le float de centerAltitude). L'altitude de l'œil au-dessus du centre est
+    // ∝ 2^−zoom (le facteur cos(pitch) est commun et s'annule) : réduire le zoom LÈVE l'œil ET élargit la vue
+    // de façon COHÉRENTE — zoom honnête → tuiles correctes → cover ET dessin corrects → zéro magenta. Quand
+    // l'œil passe sous sol+minAGL, on plafonne le zoom à la valeur qui remet l'œil pile à sol+minAGL : le zoom
+    // « bute » au lieu de figer en montant. Idempotent (si déjà au-dessus, no-op ; borné min/maxZoom).
+    const double centerAlt = state.getCenterAltitude();
+    const double eyeAboveCenter = loc->altitude - centerAlt;
+    const double wantAboveCenter = minEyeAlt - centerAlt;
+    if (eyeAboveCenter > 1.0 && wantAboveCenter > 1.0 && wantAboveCenter > eyeAboveCenter) {
+        const double dz = std::log2(eyeAboveCenter / wantAboveCenter); // < 0 → dézoome juste ce qu'il faut
+        const double appliedZoom = util::clamp(state.getZoom() + dz, state.getMinZoom(), state.getMaxZoom());
+        if (std::abs(appliedZoom - state.getZoom()) > 0.001) {
+            state.setLatLngZoom(state.getLatLng(), appliedZoom);
+        }
     }
 }
 

@@ -141,7 +141,7 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     // quasi nulle (sinon micro-blancs qui reviennent en terrain vallonné). Effectif à exagération
     // 1.2 : ~43 m aux frontières, ~2,9 m ailleurs (≈ le test 40 m validé, avec margin). Base = 8 m
     // (Vulkan/Android l'appliquent pleine sur tous les bords, cf. tweaker) → non régressée.
-    const float skirtFactor = (max(dzX, dzY) > 0.0) ? 4.5 : 0.3;
+    const float skirtFactor = (max(dzX, dzY) > 0.0) ? 4.5 : 1.2;
     const float ele_delta = (float(vertx.pos.z) == 1.0)
                                 ? props.elevation_offset * skirtFactor * props.exaggeration
                                 : 0.0;

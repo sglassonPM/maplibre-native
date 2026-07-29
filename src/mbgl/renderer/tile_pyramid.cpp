@@ -156,10 +156,29 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
         // élévation. z7 = tuiles ~200 km, résolution ~km : une poignée couvre toute la région, coût
         // négligeable. tileCover à z7 renvoie la/les tuile(s) grossière(s) couvrant le frustum → large zone
         // autour de la caméra. Seulement si c'est plus grossier que l'idéal (sinon inutile).
-        if (type == SourceType::RasterDEM) {
+        // DEM : anti-collision (élévation hors écran). Raster (satellite) : fallback grossier TOUJOURS
+        // chargé pour combler les trous « bleus » quand le fin est évincé/pas encore chargé (vue élargie).
+        if (type == SourceType::RasterDEM || type == SourceType::Raster) {
             constexpr int32_t overviewZoom = 10; // ~150 m/px : assez fin pour ne pas moyenner un sommet vers
             if (overviewZoom >= static_cast<int32_t>(zoomRange.min) && overviewZoom < idealZoom) {
                 overviewTiles = util::tileCover(tileCoverParameters, overviewZoom, zoomRange); // le bas (clip)
+            }
+            // Satellite : FILET GLOBAL — le MONDE ENTIER à z2 (16 tuiles), construit en dur (PAS via tileCover,
+            // qui reste borné au frustum et rate le vrai horizon à fort pitch). Garantit qu'une tuile z2 ancêtre
+            // existe TOUJOURS pour n'importe quelle maille → getBasemapTextureForTile ne renvoie jamais nullptr
+            // → jamais de bleu (au pire du satellite flou au loin). z10 couvre le proche net, z2 comble le reste.
+            // Coût : 16 fetch grossiers gardés en cache, négligeable. C'est ce filet monde qui manquait : le log
+            // montrait z0/z1/z2 chargés au départ puis ÉVINCÉS → plus d'ancêtre global → trous bleus.
+            if (type == SourceType::Raster) {
+                constexpr int32_t worldZoom = 2;
+                if (worldZoom >= static_cast<int32_t>(zoomRange.min) && worldZoom < idealZoom) {
+                    const uint32_t side = 1u << worldZoom;
+                    for (uint32_t x = 0; x < side; ++x) {
+                        for (uint32_t y = 0; y < side; ++y) {
+                            overviewTiles.emplace_back(static_cast<uint8_t>(worldZoom), x, y);
+                        }
+                    }
+                }
             }
         }
     }
@@ -232,18 +251,29 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
             maxParentTileOverscaleFactor);
     }
 
-    // Isomaps : charge + RETIENT l'aperçu grossier DEM (anti-collision), NON rendu (renderTileFn vide) — on
-    // ne veut surtout pas draper une tuile z7 mondiale (OOM). Interrogé via getLoadedTiles() dans getElevation.
+    // Isomaps : charge + RETIENT l'aperçu grossier. DEM = NON rendu (renderTileFn vide) : seulement interrogé
+    // en élévation via getLoadedTiles() (surtout pas draper une tuile grossière mondiale). Raster (satellite)
+    // = RENDU (uploadé) pour que le terrain puisse l'échantillonner en fallback → plus de trous bleus.
     if (!overviewTiles.empty()) {
-        algorithm::updateRenderables(
-            getTileFn,
-            createTileFn,
-            retainTileFn,
-            [](const UnwrappedTileID&, Tile&) {},
-            overviewTiles,
-            emptyPrefetchedTiles,
-            zoomRange,
-            maxParentTileOverscaleFactor);
+        if (type == SourceType::RasterDEM) {
+            algorithm::updateRenderables(getTileFn,
+                                         createTileFn,
+                                         retainTileFn,
+                                         [](const UnwrappedTileID&, Tile&) {},
+                                         overviewTiles,
+                                         emptyPrefetchedTiles,
+                                         zoomRange,
+                                         maxParentTileOverscaleFactor);
+        } else {
+            algorithm::updateRenderables(getTileFn,
+                                         createTileFn,
+                                         retainTileFn,
+                                         renderTileFn,
+                                         overviewTiles,
+                                         emptyPrefetchedTiles,
+                                         zoomRange,
+                                         maxParentTileOverscaleFactor);
+        }
     }
 
     algorithm::updateRenderables(getTileFn,
