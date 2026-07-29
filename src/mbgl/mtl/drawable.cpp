@@ -257,9 +257,15 @@ void Drawable::draw(PaintParameters& parameters) const {
             if (enableStencil && !newStencilMode) {
                 newStencilMode = parameters.stencilModeForClipping(tileID->toUnwrapped());
             }
-            const auto depthMode = getEnableDepth()
-                                       ? parameters.depthModeForSublayer(getSubLayerIndex(), getDepthType())
-                                       : gfx::DepthMode::disabled();
+            // Isomaps reversed-Z : les drawables 3D (le maillage terrain) sont rendus profondeur
+            // INVERSEE (near->1, far->0, cf. mtl/terrain.hpp) -> comparaison GreaterEqual (le plus proche
+            // = plus grande valeur inversee gagne), ecrit la profondeur (mask = getDepthType). Les 2D
+            // (drapage, symboles) gardent depthModeForSublayer (LessEqual). Clear main pass = 0 quand terrain.
+            const auto depthMode =
+                !getEnableDepth() ? gfx::DepthMode::disabled()
+                : getIs3D()
+                    ? gfx::DepthMode{.func = gfx::DepthFunctionType::GreaterEqual, .mask = getDepthType()}
+                    : parameters.depthModeForSublayer(getSubLayerIndex(), getDepthType());
             const auto stencilMode = enableStencil ? parameters.stencilModeForClipping(tileID->toUnwrapped())
                                                    : gfx::StencilMode::disabled();
             impl->depthStencilState = context.makeDepthStencilState(depthMode, stencilMode, renderable);

@@ -199,6 +199,20 @@ void Context::performCleanup() {
     clipMaskUniformsBufferUsed = false;
 }
 
+void Context::reduceMemoryUsage() {
+    // Isomaps : réinitialiser l'état GPU transitoire du Context laissé par une session de drapage
+    // terrain. Ces objets (état depth-stencil du masque de clipping, pipeline de masque, buffer d'UBO
+    // de masque, renderable de suivi) sont mis en cache et survivent à tout sauf à la destruction du
+    // Context — reduceMemoryUse ne les touchait pas. Un état stencil bâti pendant le drapage survivait
+    // au retour sur un style non-3D → les calques lignes/fills échouaient le stencil-test partout =
+    // rendus blancs. On force leur reconstruction propre à la frame suivante.
+    clipMaskDepthStencilState.reset();
+    clipMaskPipelineState.reset();
+    clipMaskUniformsBuffer.reset();
+    clipMaskUniformsBufferUsed = false;
+    stencilStateRenderable = nullptr;
+}
+
 gfx::UniqueDrawableBuilder Context::createDrawableBuilder(std::string name) {
     return std::make_unique<DrawableBuilder>(std::move(name));
 }

@@ -1,4 +1,9 @@
 #import "Mapbox.h"
+#import <QuartzCore/QuartzCore.h> // Isomaps : CACurrentMediaTime pour le chrono de chargement des tuiles
+
+// 🧪 Isomaps DIAG (à retirer) — compteurs de tuiles du terrain, exposés par le moteur (render_terrain.cpp).
+extern "C" int isomapsDebugMeshTileCount(void);
+extern "C" int isomapsDebugSatTileCount(void);
 
 #import "MBXViewController.h"
 
@@ -230,6 +235,7 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
 @property (nonatomic) MBXState *currentState;
 @property (weak, nonatomic) IBOutlet UIButton *hudLabel;
 @property (nonatomic, strong) UILabel *isomapsPitchLabel;
+@property (nonatomic) BOOL isomapsInitialCameraApplied; // Isomaps : ne poser la caméra qu'une fois (1er style)
 @property (nonatomic, strong) UIImageView *isomapsLogoView;
 @property (weak, nonatomic) IBOutlet MBXFrameTimeGraphView *frameTimeGraphView;
 @property (nonatomic) NSInteger styleIndex;
@@ -298,7 +304,7 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
   // saving and restoring when the application's state changes.
   self.currentState = [MBXStateManager sharedManager].currentState;
 
-  [MLNLoggingConfiguration sharedConfiguration].loggingLevel = MLNLoggingLevelVerbose;
+  [MLNLoggingConfiguration sharedConfiguration].loggingLevel = MLNLoggingLevelWarning;
   [MLNLoggingConfiguration sharedConfiguration].handler =
       ^(MLNLoggingLevel level, NSString *fileName, NSUInteger line, NSString *message) {
         NSLog(@"%@:%ld %@", fileName, line, message);
@@ -339,14 +345,9 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
   [self setStyles];
   [self cycleStyles:self];
 
-  /// Isomaps — caméra initiale sur le Mont Blanc, inclinée, pour évaluer le terrain 3D.
-  /// (le terrain a minzoom 6 : en vue monde il n'est jamais sollicité)
-  MLNMapCamera *isomapsCamera =
-      [MLNMapCamera cameraLookingAtCenterCoordinate:CLLocationCoordinate2DMake(45.8326, 6.8652)
-                                       acrossDistance:12000
-                                                pitch:65
-                                              heading:200];
-  [self.mapView setCamera:isomapsCamera animated:NO];
+  /// Isomaps — caméra initiale = même caméra de RÉFÉRENCE que didFinishLoadingStyle/restoreMapState
+  /// (une seule vérité), pour ne pas sauter entre plusieurs positions au démarrage.
+  [self.mapView setCamera:[self isomapsReferenceCamera] animated:NO];
 
   self.mapView.experimental_enableFrameRateMeasurement = YES;
   self.hudLabel.titleLabel.font = [UIFont monospacedDigitSystemFontOfSize:10
@@ -2687,6 +2688,66 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
                     wrap:(NSInteger)wrap
              overscaledZ:(NSInteger)overscaledZ
                 sourceID:(NSString *)sourceID {
+  // Isomaps : ce trace par-tuile est trop verbeux. OFF par défaut ; passer à YES pour diagnostiquer
+  // le zoom réel des tuiles chargées (overscaledZ) par source.
+  static const BOOL kIsomapsLogTileOps = NO;
+
+  // 🧪 Isomaps CHRONO chargement (à retirer) : mesure requête→chargée par tuile satellite pour
+  // chiffrer la latence proxy (api.iso-maps.com). Agrège cache vs réseau + erreurs/annulations.
+  // OFF : le NSLog par tuile (~milliers/s pendant un déplacement) hache lui-même la fluidité.
+  static const BOOL kIsomapsLogTileTiming = NO;
+  if (kIsomapsLogTileTiming && [sourceID containsString:@"satellite"]) {
+    static NSMutableDictionary<NSString *, NSNumber *> *reqTimes;
+    static NSMutableDictionary<NSString *, NSNumber *> *fromCacheFlags;
+    static int inFlight = 0, doneNet = 0, doneCache = 0, errors = 0, cancels = 0;
+    static double sumNetMs = 0, maxNetMs = 0, sumCacheMs = 0;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+      reqTimes = [NSMutableDictionary dictionary];
+      fromCacheFlags = [NSMutableDictionary dictionary];
+    });
+    NSString *key = [NSString stringWithFormat:@"%ld/%ld/%ld/%ld", overscaledZ, x, y, wrap];
+    const double now = CACurrentMediaTime() * 1000.0; // ms
+    switch (operation) {
+      case MLNTileOperationRequestedFromCache:
+        reqTimes[key] = @(now); fromCacheFlags[key] = @YES; inFlight++;
+        break;
+      case MLNTileOperationRequestedFromNetwork:
+        reqTimes[key] = @(now); fromCacheFlags[key] = @NO; inFlight++;
+        break;
+      case MLNTileOperationLoadFromCache:
+      case MLNTileOperationLoadFromNetwork: {
+        NSNumber *t0 = reqTimes[key];
+        if (t0) {
+          const double dt = now - t0.doubleValue;
+          const BOOL net = (operation == MLNTileOperationLoadFromNetwork);
+          if (net) { doneNet++; sumNetMs += dt; maxNetMs = MAX(maxNetMs, dt); }
+          else { doneCache++; sumCacheMs += dt; }
+          [reqTimes removeObjectForKey:key];
+          inFlight = MAX(0, inFlight - 1);
+          NSLog(@"🧪 TUILE sat z%ld %@ %.0f ms | en vol=%d | réseau moy=%.0f max=%.0f n=%d · cache moy=%.0f n=%d · err=%d annul=%d",
+                overscaledZ, net ? @"RÉSEAU" : @"cache", dt, inFlight,
+                doneNet ? sumNetMs / doneNet : 0.0, maxNetMs, doneNet,
+                doneCache ? sumCacheMs / doneCache : 0.0, doneCache, errors, cancels);
+        }
+        break;
+      }
+      case MLNTileOperationError:
+        errors++; [reqTimes removeObjectForKey:key]; inFlight = MAX(0, inFlight - 1);
+        NSLog(@"🧪 TUILE sat z%ld ERREUR | en vol=%d err=%d", overscaledZ, inFlight, errors);
+        break;
+      case MLNTileOperationCancelled:
+        cancels++; [reqTimes removeObjectForKey:key]; inFlight = MAX(0, inFlight - 1);
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (!kIsomapsLogTileOps) {
+    return;
+  }
+
   NSString *tileStr = [NSString
       stringWithFormat:@"(x: %ld, y: %ld, z: %ld, wrap: %ld, overscaledZ: %ld, sourceID: %@)", x, y,
                        z, wrap, overscaledZ, sourceID];
@@ -2964,21 +3025,24 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
     };
     // Lever le plafond d'inclinaison (60° par défaut) pour pouvoir regarder l'horizon
     // et le ciel au-dessus du relief.
-    mapView.maximumPitch = 60.0;
+    mapView.maximumPitch = 120.0;  // Isomaps : >90° pour lever les yeux vers un sommet (regard montant).
+    // Le cœur autorise jusqu'à 180° (PITCH_MAX=π) ; au-delà de 90° le rendu (ciel/horizon/profondeur)
+    // reste à bâtir — plafond de test à 120° pour explorer le regard montant à la main.
 
-    // Vue du DESSUS (pitch 0) pour juger le chevauchement des tuiles : de haut, deux
-    // tuiles superposees se voient comme des grilles dedoublees, un maillage propre = grille nette.
-    // Vue classique depuis Sallanches (~22 km au NO) sur le massif du Mont Blanc, pitch eleve.
-    [mapView setCamera:[MLNMapCamera cameraLookingAtCenterCoordinate:CLLocationCoordinate2DMake(45.8326, 6.8652)
-                                                      acrossDistance:22000
-                                                               pitch:55
-                                                             heading:123]
-              animated:NO];
+    // Isomaps TEST — pose la caméra de RÉFÉRENCE (vue oblique Sallanches→Mont-Blanc) à chaque lancement,
+    // identique à chaque fois, sans mémoriser la dernière position (cf. isomapsReferenceCamera). Une seule
+    // pose par lancement (flag) → pas de flash ; même caméra que restoreMapState → pas de saut.
+    if (!self.isomapsInitialCameraApplied) {
+        self.isomapsInitialCameraApplied = YES;
+        [mapView setCamera:[self isomapsReferenceCamera] animated:NO];
+    }
 
     // Isomaps — overlay du pitch en temps reel, pour reperer le seuil ou les trous reapparaissent.
     if (!self.isomapsPitchLabel) {
         UILabel *lbl = [[UILabel alloc] init];
-        lbl.font = [UIFont monospacedDigitSystemFontOfSize:22 weight:UIFontWeightBold];
+        lbl.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightBold];
+        lbl.adjustsFontSizeToFitWidth = YES;
+        lbl.minimumScaleFactor = 0.6;
         lbl.textColor = [UIColor whiteColor];
         lbl.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.55];
         lbl.textAlignment = NSTextAlignmentCenter;
@@ -2989,10 +3053,21 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
         [NSLayoutConstraint activateConstraints:@[
             [lbl.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
             [lbl.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:50],
-            [lbl.widthAnchor constraintEqualToConstant:150],
+            [lbl.widthAnchor constraintEqualToConstant:300],
             [lbl.heightAnchor constraintEqualToConstant:34],
         ]];
         self.isomapsPitchLabel = lbl;
+
+        // 🧪 Isomaps DIAG (à retirer) — rafraîchit pitch + compte de tuiles en direct (4×/s), car ni
+        // regionDidChange ni le HUD ne se déclenchent quand les tuiles se chargent à caméra immobile.
+        __weak MBXViewController *weakSelf = self;
+        [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t) {
+            MBXViewController *s = weakSelf;
+            if (!s) { [t invalidate]; return; }
+            s.isomapsPitchLabel.text = [NSString stringWithFormat:@"pitch %.0f° · alt %.0f m · maillage %d · sat %d",
+                                        s.mapView.camera.pitch, s.mapView.camera.altitude,
+                                        isomapsDebugMeshTileCount(), isomapsDebugSatTileCount()];
+        }];
     }
     self.isomapsPitchLabel.text = [NSString stringWithFormat:@"pitch %.0f°", mapView.camera.pitch];
 
@@ -3061,6 +3136,23 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
                      animated:(BOOL)animated {
   if (reason != MLNCameraChangeReasonProgrammatic) {
     self.randomWalk = NO;
+  }
+
+  // Isomaps DIAG — les 4 "zooms" en jeu (le zoom CARTE ≠ le zoom des TUILES). OFF par défaut :
+  // ce NSLog tire pendant les gestes et hache la fluidité. Passer à YES pour re-diagnostiquer.
+  static const BOOL kIsomapsLogZoom = NO;
+  if (kIsomapsLogZoom) {
+    const double zc = mapView.zoomLevel;             // zoom carte (caméra), fractionnaire
+    const int zr = (int)llround(zc);
+    const int satTile = MIN(zr + 1, 22);             // satellite : raster 256 (+1), max 22
+    const int demTile = MIN(zr + 1, 16);             // DEM terrain : raster 256 (+1), max 16
+    const int vecTile = MIN(zr, 14);                 // vecteur openmaptiles : 512, max 14
+    NSLog(@"🔍 ZOOM carte=%.2f (arrondi z%d) | tuiles → satellite z%d%@ · DEM z%d%@ · vecteur z%d%@ | pitch %.0f°",
+          zc, zr,
+          satTile, (zr + 1 > 22 ? @" (OVERZOOM)" : @""),
+          demTile, (zr + 1 > 16 ? @" (OVERZOOM)" : @""),
+          vecTile, (zr > 14 ? @" (OVERZOOM)" : @""),
+          mapView.camera.pitch);
   }
 
   [self updateHUD];
@@ -3208,26 +3300,25 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
   return value && [value isEqual:@"YES"];
 }
 
+// Isomaps TEST — caméra de référence FIXE (vue oblique Sallanches→Mont-Blanc). Posée identique à chaque
+// lancement + retour d'arrière-plan, pour pouvoir comparer un build à l'autre. AUCUNE mémorisation.
+- (MLNMapCamera *)isomapsReferenceCamera {
+  // On CENTRE sur un point BAS de la vallée (Passy, ~600 m) et non sur le sommet (4800 m) : sinon l'API,
+  // aveugle au relief, calcule le zoom pour le point au niveau de la mer et le terrain « remonte » jusqu'à
+  // l'œil → caméra embarquée (vue d'une seule face, 15 tuiles). En centrant bas, l'œil est réellement en
+  // hauteur → vue large. Regard SE (heading 123) : le massif du Mont-Blanc est dans l'axe, au loin.
+  // Vue RAPPROCHÉE (diagnostic flicker) : œil ~3200 m, ~8 km de la cible → DEM fin STABLE chargé,
+  // couverture dense, pas de z6 grossier au bord qui oscille. Centre = vallée de Sallanches (bas,
+  // ~550 m) pour ne pas embarquer la caméra (API aveugle au relief). Regard SE vers le massif.
+  return [MLNMapCamera cameraLookingAtCenterCoordinate:CLLocationCoordinate2DMake(45.9400, 6.6400)
+                                        acrossDistance:8000
+                                                 pitch:60
+                                               heading:125];
+}
+
 - (void)saveCurrentMapState:(__unused NSNotification *)notification {
-  // saved changes to the settings can break UI tests, so always start from the defaults when
-  // testing
-  if ([self isUITesting]) {
-    return;
-  }
-
-  // The following properties can change after the view loads so we need to save their
-  // state before exiting the view controller.
-  self.currentState.camera = self.mapView.camera;
-  self.currentState.showsUserLocation = self.mapView.showsUserLocation;
-  self.currentState.userTrackingMode = self.mapView.userTrackingMode;
-  self.currentState.showsUserHeadingIndicator = self.mapView.showsUserHeadingIndicator;
-  self.currentState.showsMapScale = self.mapView.showsScale;
-  self.currentState.showsZoomLevelOrnament = self.zoomLevelOrnamentEnabled;
-  self.currentState.showsTimeFrameGraph = self.frameTimeGraphEnabled;
-  self.currentState.debugMask = self.mapView.debugMask;
-  self.currentState.reuseQueueStatsEnabled = self.reuseQueueStatsEnabled;
-
-  [[MBXStateManager sharedManager] saveState:self.currentState];
+  // Isomaps TEST — on NE mémorise PAS la position ni l'état (pour toujours repartir du même point de
+  // référence, cf. isomapsReferenceCamera). No-op volontaire.
 }
 
 - (void)restoreMapState:(__unused NSNotification *)notification {
@@ -3237,7 +3328,9 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
 
   MBXState *currentState = [MBXStateManager sharedManager].currentState;
 
-  self.mapView.camera = currentState.camera;
+  // Isomaps TEST — on repose la caméra de RÉFÉRENCE (pas la dernière position) au retour d'arrière-plan,
+  // pour toujours retrouver exactement le même point. Même caméra que didFinishLoadingStyle → pas de saut.
+  self.mapView.camera = [self isomapsReferenceCamera];
   self.mapView.showsUserLocation = currentState.showsUserLocation;
   self.mapView.userTrackingMode = currentState.userTrackingMode;
   self.mapView.showsUserHeadingIndicator = currentState.showsUserHeadingIndicator;

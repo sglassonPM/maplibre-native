@@ -5,6 +5,7 @@
 #include <mbgl/util/geo.hpp>
 #include <mbgl/util/geojson.hpp>
 
+#include <array>
 #include <functional>
 #include <memory>
 #include <string>
@@ -63,6 +64,9 @@ public:
     /// Altitude du terrain 3D (m, exagération incluse) à une coordonnée, ou nullopt si pas de
     /// terrain actif. Échantillonnée depuis le DEM CPU sur le thread appelant (= thread de rendu).
     std::optional<double> queryTerrainElevation(const LatLng&) const;
+
+    /// DIAG isomaps : {terrain!=null, mesh tiles, render targets, terrainDraping, TileLayerGroups sautés}.
+    std::array<int, 5> isomapsTerrainDebug() const;
 
     AnnotationIDs queryPointAnnotations(const ScreenBox& box) const;
     AnnotationIDs queryShapeAnnotations(const ScreenBox& box) const;

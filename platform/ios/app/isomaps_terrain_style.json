@@ -8,7 +8,7 @@
       "id": "bg-test",
       "type": "background",
       "paint": {
-        "background-color": "#2b2f33"
+        "background-color": "#b8c7d6"
       }
     },
     {
@@ -38,6 +38,7 @@
       "source-layer": "mountain_peak",
       "minzoom": 11.5,
       "layout": {
+        "visibility": "none",
         "text-font": [
           "Noto Sans Italic"
         ],
@@ -84,12 +85,12 @@
     },
     "satellite": {
       "type": "raster",
-      "attribution": "© Isomaps, Mapbox",
+      "attribution": "© Isomaps, MapTiler",
       "minzoom": 0,
-      "maxzoom": 21,
+      "maxzoom": 14,
       "tileSize": 256,
       "tiles": [
-        "https://api.iso-maps.com/v1/tiles/satellite/{z}/{x}/{y}?api_key=ZTTE9VTFXz4XQuKZPk5J5rR3dwbReZ5qAhBHRtfLalnvbCMNGEO7aPYzEifJ"
+        "https://api.maptiler.com/maps/satellite-v4/256/{z}/{x}/{y}@2x.webp?key=J7FRYBWhpMIw5Eh5pZOz"
       ]
     },
     "terrainSource": {
@@ -101,7 +102,7 @@
         "https://cdn.iso-maps.com/terrain/{z}/{x}/{y}.png"
       ],
       "minzoom": 6,
-      "maxzoom": 16
+      "maxzoom": 18
     }
   },
   "version": 8,
@@ -118,6 +119,7 @@
   ],
   "terrain": {
     "source": "terrainSource",
-    "exaggeration": 1.2
+    "exaggeration": 1.2,
+    "basemap": "satellite"
   }
 }

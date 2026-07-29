@@ -758,6 +758,13 @@ std::vector<Feature> RenderOrchestrator::querySourceFeatures(const std::string& 
     return source->querySourceFeatures(options);
 }
 
+std::array<int, 5> RenderOrchestrator::isomapsTerrainDebug() const {
+    const int hasTerrain = renderTerrain ? 1 : 0;
+    const int meshTiles = renderTerrain ? static_cast<int>(renderTerrain->getLastRenderedMeshTiles().size()) : 0;
+    const int targets = static_cast<int>(renderTargets.size());
+    return {hasTerrain, meshTiles, targets, isomapsLastDraping, isomapsLastSkipped};
+}
+
 std::optional<double> RenderOrchestrator::queryTerrainElevation(const LatLng& latLng) const {
     if (!renderTerrain || !renderTerrain->isEnabled()) {
         return std::nullopt;

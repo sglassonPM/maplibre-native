@@ -5,6 +5,7 @@
 #include <mbgl/renderer/layer_group.hpp>
 #include <mbgl/renderer/paint_parameters.hpp>
 #include <mbgl/renderer/render_terrain.hpp>
+#include <mbgl/map/transform_state.hpp>
 #include <mbgl/shaders/terrain_layer_ubo.hpp>
 #include <mbgl/shaders/shader_defines.hpp>
 #include <mbgl/util/constants.hpp>
@@ -35,15 +36,13 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
     // (default 1.0 renders true-scale elevation)
     const float exaggeration = terrain->getExaggeration();
 
-    // Skirt depth (u_ele_delta): the shader drops the mesh's skirt vertices by this many
-    // metres into a curtain, a safety net for transient cracks while neighbouring tiles at
-    // different zoom levels stream in.
-    //
-    // Isomaps: FIXED short depth instead of maplibre-gl-js Terrain.getSkirtLength()
-    // (1/5 of the tile's world width at the current zoom). That formula gave ~3.9 km at
-    // z11 — visible curtains on real alpine terrain — and, being zoom-proportional, shrank
-    // to ~2.4 m at z15, reopening cracks. A crack comes from an elevation mismatch between
-    // tile edges, measured in metres of terrain, so a fixed metric depth is the right unit.
+    // Skirt depth (u_ele_delta), en mètres RÉELS. Baseline PARTAGÉE : les shaders Vulkan/WebGPU
+    // (Android) l'appliquent telle quelle à TOUS les bords → on la garde courte (8 m) pour ne pas
+    // créer de rideaux partout. Le shader Metal (plus avancé : raccord d'arête + skirtFactor PAR
+    // bord) la module lui-même : plein uniquement aux frontières de LOD (×~4.2) et ×exagération,
+    // pour ~40 m effectifs à exagération 1.2 là où c'est nécessaire (micro-blancs en terrain raide),
+    // quasi nul ailleurs. PAS la formule gl-js getSkirtLength (1/5 largeur tuile → rideaux à z11,
+    // cracks rouverts à z15). Une profondeur métrique est le bon unit (le crack = décalage d'altitude).
     const float elevationOffset = 8.0f;
 
     // Populate layer-level UBO with terrain properties
@@ -54,6 +53,26 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
                                                .pad1 = 0.0f,
                                                .pad2 = 0.0f};
     layerUniforms.createOrUpdate(idTerrainEvaluatedPropsUBO, &propsUBO, context);
+
+    // Isomaps BRUME : position mercator [0,1] de la camera + latitude (calculees une fois) — servent a
+    // convertir, PAR TUILE, la distance camera→sommet en metres reels dans le repere local de la tuile.
+    constexpr double kEarthCircumference = 40075016.686;
+    constexpr double kPi = 3.14159265358979323846;
+    const LatLng camLatLng = parameters.state.getLatLng(); // centre écran — sert à la latitude (mètres)
+    const double cosLat = std::cos(camLatLng.latitude() * kPi / 180.0);
+    // Position mercator de l'ŒIL (pas le centre écran). Sinon la distance est mesurée depuis la CIBLE du
+    // regard (au loin) → premier plan embrumé + cible nette, exactement l'inverse du voulu. L'œil est
+    // près du premier plan → celui-ci reste net, le lointain (cible) s'embrume.
+    double camMercX, camMercY;
+    const auto freeCam = parameters.state.getFreeCameraOptions();
+    if (freeCam.position) {
+        camMercX = (*freeCam.position)[0];
+        camMercY = (*freeCam.position)[1];
+    } else {
+        camMercX = (camLatLng.longitude() + 180.0) / 360.0;
+        const double sinLat = std::sin(camLatLng.latitude() * kPi / 180.0);
+        camMercY = 0.5 - std::log((1.0 + sinLat) / (1.0 - sinLat)) / (4.0 * kPi);
+    }
 
 #if MLN_UBO_CONSOLIDATION
     int i = 0;
@@ -72,6 +91,13 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
         // This uses the same matrix calculation as other layers
         mat4 matrix = parameters.matrixForTile(tileID);
 
+        // Isomaps BRUME : exprime la camera dans le repere local (0..8192) de CETTE tuile + metres/unite.
+        const double fogN = static_cast<double>(1ull << tileID.canonical.z);
+        const float fogCamX = static_cast<float>(
+            (camMercX * fogN - static_cast<double>(tileID.wrap) * fogN - tileID.canonical.x) * 8192.0);
+        const float fogCamY = static_cast<float>((camMercY * fogN - tileID.canonical.y) * 8192.0);
+        const float fogMPerUnit = static_cast<float>(kEarthCircumference * cosLat / fogN / 8192.0);
+
 #if !MLN_UBO_CONSOLIDATION
         auto& drawableUniforms = drawable.mutableUniformBuffers();
 #endif
@@ -83,7 +109,9 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
 #endif
             .matrix = util::cast<float>(matrix),
             .dem_coords = terrain->getDrawableDemCoords(*drawable.getTileID()),
-            .edge_dz = terrain->getDrawableEdgeDz(*drawable.getTileID())
+            .edge_dz = terrain->getDrawableEdgeDz(*drawable.getTileID()),
+            .map_coords = terrain->getDrawableMapCoords(*drawable.getTileID()),
+            .fog_params = {fogCamX, fogCamY, fogMPerUnit, static_cast<float>(tileID.canonical.z)}
         };
 
 #if !MLN_UBO_CONSOLIDATION

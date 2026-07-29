@@ -52,5 +52,19 @@ void Terrain::setExaggeration(float exaggeration) {
     observer->onTerrainChanged(*this);
 }
 
+std::string Terrain::getBasemapSource() const {
+    return impl->basemapSourceID;
+}
+
+void Terrain::setBasemapSource(const std::string& sourceID) {
+    auto impl_ = mutableImpl();
+    impl_->basemapSourceID = sourceID;
+    impl = std::move(impl_);
+    // L'observer est null à la conversion (Terrain pas encore attaché) : on ne notifie que si présent.
+    if (observer) {
+        observer->onTerrainChanged(*this);
+    }
+}
+
 } // namespace style
 } // namespace mbgl

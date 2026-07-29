@@ -159,8 +159,19 @@ const MLNExceptionName MLNRedundantSourceIdentifierException =
 // MARK: Terrain 3D (Isomaps)
 
 - (void)isomapsSetTerrainSource:(NSString *)sourceIdentifier exaggeration:(double)exaggeration {
-  self.rawStyle->setTerrain(std::make_unique<mbgl::style::Terrain>(
-      std::string([sourceIdentifier UTF8String]), static_cast<float>(exaggeration)));
+  [self isomapsSetTerrainSource:sourceIdentifier basemapSource:nil exaggeration:exaggeration];
+}
+
+- (void)isomapsSetTerrainSource:(NSString *)sourceIdentifier
+                  basemapSource:(nullable NSString *)basemapSourceIdentifier
+                   exaggeration:(double)exaggeration {
+  auto terrain = std::make_unique<mbgl::style::Terrain>(std::string([sourceIdentifier UTF8String]),
+                                                        static_cast<float>(exaggeration));
+  if (basemapSourceIdentifier) {
+    // Source raster basemap échantillonnée DIRECTEMENT sur le maillage (pas de drapage offscreen).
+    terrain->setBasemapSource(std::string([basemapSourceIdentifier UTF8String]));
+  }
+  self.rawStyle->setTerrain(std::move(terrain));
 }
 
 - (void)isomapsRemoveTerrain {

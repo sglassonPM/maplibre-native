@@ -39,6 +39,8 @@ namespace mbgl {
 TransformParameters::TransformParameters(const TransformState& state_)
     : state(state_) {
     // Update the default matrices to the current viewport dimensions.
+    // Isomaps : near plane laissé à 1. C'est reversed-Z (mtl/terrain.hpp) qui donne la précision au loin
+    // (far->0, zone riche du Depth32Float), pas un near élevé — donc AUCUN clipping en navigation/fort pitch.
     state.getProjMatrix(projMatrix);
 
     // Also compute a projection matrix that aligns with the current pixel grid,

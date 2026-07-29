@@ -37,7 +37,17 @@ std::optional<Terrain> Converter<Terrain>::operator()(const Convertible& value, 
         exaggeration = *converted;
     }
 
-    return Terrain(*source, exaggeration);
+    Terrain terrain(*source, exaggeration);
+
+    // Isomaps (extension) : "basemap" = id de la source raster échantillonnée DIRECTEMENT sur le
+    // maillage (raster-on-terrain), au lieu du drapage offscreen par tuile. Optionnel.
+    if (std::optional<Convertible> basemapValue = objectMember(value, "basemap")) {
+        if (std::optional<std::string> basemap = toString(*basemapValue)) {
+            terrain.setBasemapSource(*basemap);
+        }
+    }
+
+    return terrain;
 }
 
 } // namespace conversion

@@ -193,7 +193,31 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
     const double worldSize = Projection::worldSize(transform.getScale());
     const bool allowVariableZoom = transform.getPitch() > state.tileLodPitchThreshold;
     const uint8_t minZoom = allowVariableZoom ? zoomRange.min : z;
-    const uint8_t maxZoom = ((state.tileLodMode == TileLodMode::Distance) && allowVariableZoom) ? zoomRange.max : z;
+    uint8_t maxZoom = ((state.tileLodMode == TileLodMode::Distance) && allowVariableZoom) ? zoomRange.max : z;
+    // Isomaps : BORNE LA DESCENTE au pitch pour le TERRAIN. Sinon à haute altitude (map-zoom bas) le LOD
+    // Distance plonge le premier plan jusqu'au zoom max de la source alors que le sol est LOIN → des
+    // centaines de tuiles z14 absurdes (z14 vu de 16 km d'altitude). Le zoom doit suivre l'altitude : on
+    // limite la descente à z + kMaxPitchDescent niveaux. Aux vues normales (map-zoom ≥ ~11) le cap est
+    // ≥ z14 → satellite/premier plan INCHANGÉS ; il ne mord qu'aux vues hautes/lointaines (map-zoom bas).
+    // Gaté sur la présence de terrain : DEM, satellite et maillage partagent l'elevationProvider en 3D →
+    // se plafonnent ENSEMBLE (cohérence, pas de gris) ; la 2D (provider nul) reste strictement inchangée.
+    // Isomaps : plafond du zoom par ALTITUDE réelle de l'œil (le zoom suit l'altitude, quel que soit le
+    // pitch). Le cap map-zoom ne marchait pas : à fort pitch le map-zoom reste haut (basé sur le point
+    // central proche) → z14 jusqu'à l'horizon même à 8 km d'altitude. Ici on lit l'altitude en mètres et
+    // on plafonne toute la couverture. Gaté terrain → DEM+satellite+maillage plafonnent ensemble (pas de
+    // gris) ; 2D inchangée. En vue basse (œil près du sol) le plafond reste haut → premier plan net.
+    if (state.elevationProvider && maxZoom > z) {
+        if (const auto loc = transform.getFreeCameraOptions().getLocation()) {
+            const double altM = loc->altitude; // mètres au-dessus du niveau de la mer
+            uint8_t altCap = 22;
+            if (altM > 20000.0)     altCap = 12;
+            else if (altM > 8000.0) altCap = 13;
+            else if (altM > 4000.0) altCap = 14;
+            else if (altM > 2000.0) altCap = 15;
+            // < 2000 m : pas de plafond (premier plan fin, borné par la source)
+            maxZoom = std::min<uint8_t>(maxZoom, std::max<uint8_t>(altCap, minZoom));
+        }
+    }
     const uint8_t overscaledZoom = std::max(overscaledZ.value_or(z), maxZoom);
     const bool flippedY = transform.getViewportMode() == ViewportMode::FlippedY;
 
@@ -322,6 +346,17 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
             shouldSplitTile = distanceToTileMercator * tileScale < std::pow(cosPitchToTile, pitchExponent) *
                                                                        cameraToCenterDistanceMercator /
                                                                        state.tileLodScale * nominalScale;
+            // Isomaps : plafond du zoom par DISTANCE ABSOLUE de la tuile à la caméra (terrain). La formule
+            // ci-dessus scale avec la distance de visée → une vue reculée sur-découpe le lointain (Mont-
+            // Blanc z14 à 21 km même œil bas). Ici on borne le zoom atteignable d'une tuile par sa vraie
+            // distance : ~z14 à 2 km, ~z11 à 21 km, quelle que soit l'altitude de l'œil. Constante à régler.
+            if (state.elevationProvider) {
+                // distanceToTileMercator ≈ distance_mercator[0,1] / 512 → -log2 est décalé de +9 ; avec
+                // l'offset visé (~+0,6) la constante nette est ≈ -8,4. Donne ~z14 à 2 km, ~z11 à 21 km.
+                const double tileDistMaxZoom =
+                    -std::log2(std::max(1e-9, distanceToTileMercator)) - 6.4;
+                if (static_cast<double>(node.zoom) + 1.0 > tileDistMaxZoom) shouldSplitTile = false;
+            }
         } else {
             const vec3 distanceXyz = node.aabb.distanceXYZ(centerCoord);
             const double* longestDim = std::max_element(distanceXyz.data(), distanceXyz.data() + distanceXyz.size());

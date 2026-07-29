@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <mbgl/renderer/layer_group.hpp>
 #include <mbgl/actor/scheduler.hpp>
 #include <mbgl/renderer/renderer.hpp>
@@ -178,6 +179,14 @@ public:
     RenderSource* getRenderSource(const std::string& id) const;
 
     RenderTerrain* getRenderTerrain() const { return renderTerrain.get(); }
+
+    /// DIAG isomaps : état réel du terrain, indépendant du DEM.
+    /// {terrain!=null, nb mesh tiles, nb render targets, terrainDraping (rendu), nb TileLayerGroups sautés (rendu)}
+    std::array<int, 5> isomapsTerrainDebug() const;
+
+    /// DIAG isomaps : mesuré AU RENDU (dernière frame). terrainDraping actif + nb TileLayerGroups sautés.
+    int isomapsLastDraping = 0;
+    int isomapsLastSkipped = 0;
 
 private:
     bool isLoaded() const;

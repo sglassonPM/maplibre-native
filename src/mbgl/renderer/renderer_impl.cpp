@@ -235,12 +235,14 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
 
     const auto& layerRenderItems = renderTree.getLayerRenderItemMap();
 
-    if (auto* terrain = orchestrator.getRenderTerrain()) {
+    if (auto* terrain = orchestrator.getRenderTerrain(); terrain && !terrain->hasDirectBasemap()) {
         // Une cible de drapage par tuile de terrain. On reprend EXACTEMENT l'ensemble que le
         // terrain vient de calculer cette frame (post-altitude-stable + hysteresis) : update()
         // du terrain tourne pendant la construction du RenderTree, donc AVANT ce render(), et
         // publie lastRenderedMeshTiles. Drapage et maillage sont ainsi strictement identiques
         // — ni tuile maillee sans imagerie (gris), ni imagerie sans maillage (gaspillage).
+        // Isomaps : SAUTÉ si basemap direct (hasDirectBasemap) → le raster est échantillonné
+        // directement sur le maillage, aucune cible offscreen nécessaire (gain mémoire/fluidité).
         const std::set<UnwrappedTileID>& demTileIDs = terrain->getLastRenderedMeshTiles();
         for (const auto& id : demTileIDs) {
             texturePool.createRenderTarget(context, id, renderTreeParameters.backgroundColor);
@@ -440,13 +442,27 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
                 "main buffer",
                 {.renderable = parameters.backend.getDefaultRenderable(),
                  .clearColor = color,
+#if MLN_RENDER_BACKEND_METAL
+                 // Isomaps reversed-Z : dès que le terrain est présent, sa profondeur est inversée
+                 // (far->0) -> clear de profondeur au far inversé = 0. Sans terrain -> clear classique 1.0.
+                 .clearDepth = parameters.terrain ? 0.0f : 1.0f,
+#else
                  .clearDepth = 1.0f,
+#endif
                  .clearStencil = 0});
 #if MLN_RENDER_BACKEND_OPENGL
             parameters.updateStencilBufferAvailability();
 #endif
         }
     };
+
+    // Ne router les calques renderToTerrain (lignes/fills) vers le drapage QUE si le terrain drape
+    // REELLEMENT cette frame (au moins une tuile de maillage). Sinon — terrain non-null mais sans
+    // maillage (transitoire de changement de style, terrain qui traine, ou DEM pas encore chargé) —
+    // aucune cible de drapage n'est creee, donc sauter ces calques du rendu principal les rendrait
+    // NULLE PART = disparus. On aligne la condition de saut sur la creation des cibles
+    // (getLastRenderedMeshTiles), qui pilote justement quelles cibles existent.
+    const bool terrainDraping = parameters.terrain && !parameters.terrain->getLastRenderedMeshTiles().empty();
 
     // Actually render the layers
     // Drawables
@@ -458,13 +474,19 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
 
         // draw layer groups, opaque pass
         parameters.currentLayer = 0;
+        // 🧪 DIAG : mesure AU RENDU du skip de drapage (terrainDraping + nb de TileLayerGroups sautés)
+        int isomapsSkipped = 0;
         orchestrator.visitLayerGroupsReversed([&](LayerGroupBase& layerGroup) {
-            if (!(parameters.terrain && layerGroup.getType() == LayerGroupBase::Type::TileLayerGroup &&
+            if (!(terrainDraping && layerGroup.getType() == LayerGroupBase::Type::TileLayerGroup &&
                   layerGroup.shouldRenderToTerrain())) {
                 layerGroup.render(orchestrator, parameters);
+            } else {
+                isomapsSkipped++;
             }
             parameters.currentLayer++;
         });
+        orchestrator.isomapsLastDraping = terrainDraping ? 1 : 0;
+        orchestrator.isomapsLastSkipped = isomapsSkipped;
     };
 
     const auto drawableTranslucentPass = [&] {
@@ -477,7 +499,7 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
         // terrain render targets (RenderTarget::renderDrapedLayerGroups)
         parameters.currentLayer = static_cast<uint32_t>(orchestrator.numLayerGroups()) - 1;
         orchestrator.visitLayerGroups([&](LayerGroupBase& layerGroup) {
-            if (!(parameters.terrain && layerGroup.getType() == LayerGroupBase::Type::TileLayerGroup &&
+            if (!(terrainDraping && layerGroup.getType() == LayerGroupBase::Type::TileLayerGroup &&
                   layerGroup.shouldRenderToTerrain())) {
                 layerGroup.render(orchestrator, parameters);
             }

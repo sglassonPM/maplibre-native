@@ -42,6 +42,13 @@ public:
      */
     void setExaggeration(float exaggeration);
 
+    /**
+     * Isomaps @brief Get/Set the raster BASEMAP source sampled directly on the terrain mesh (instead
+     * of offscreen draping). Empty = auto (primary draped raster source).
+     */
+    std::string getBasemapSource() const;
+    void setBasemapSource(const std::string& sourceID);
+
     // Internal implementation
     class Impl;
     Immutable<Impl> impl;

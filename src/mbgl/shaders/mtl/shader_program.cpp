@@ -84,16 +84,16 @@ MTLRenderPipelineStatePtr ShaderProgram::getRenderPipelineState(const gfx::Rende
                                                                 const MTLVertexDescriptorPtr& vertexDescriptor,
                                                                 const gfx::ColorMode& colorMode,
                                                                 const std::optional<std::size_t> reuseHash) const {
-    if (reuseHash.has_value()) {
-        // we'd like to reuse a previous value
-        if (auto it = renderPipelineStateCache.find(reuseHash.value()); it != renderPipelineStateCache.end())
-            return it->second;
-    }
-
     auto pool = NS::TransferPtr(NS::AutoreleasePool::alloc()->init());
 
     const auto& renderableResource = renderable.getResource<RenderableResource>();
 
+    // Formats de la CIBLE de rendu (écran ou cible de drapage terrain). Extraits AVANT le lookup
+    // cache car ils DOIVENT entrer dans la clé : un même shader/vertexDescriptor/colorMode donne un
+    // pipeline state INCOMPATIBLE selon les formats couleur/depth/stencil. reuseHash seul (fourni par
+    // l'appelant) ne les distingue pas → un pipeline construit pour le drapage (satellite 3D, formats
+    // de la texture cible) serait réutilisé en passe principale sur map → rendu invalide : lignes/fills
+    // effacés en Release, crash de validation Metal en Debug. On mélange donc les formats dans la clé.
     auto colorFormat = MTL::PixelFormat::PixelFormatBGRA8Unorm;
     std::optional<MTL::PixelFormat> depthFormat = std::nullopt;
     std::optional<MTL::PixelFormat> stencilFormat = std::nullopt;
@@ -113,6 +113,22 @@ MTLRenderPipelineStatePtr ShaderProgram::getRenderPipelineState(const gfx::Rende
                 stencilFormat = tex->pixelFormat();
             }
         }
+    }
+
+    std::optional<std::size_t> cacheKey = reuseHash;
+    if (cacheKey.has_value()) {
+        std::size_t k = reuseHash.value();
+        const auto mix = [&k](std::size_t v) { k ^= v + 0x9e3779b97f4a7c15ULL + (k << 6) + (k >> 2); };
+        mix(static_cast<std::size_t>(colorFormat));
+        mix(static_cast<std::size_t>(depthFormat.value_or(MTL::PixelFormat::PixelFormatInvalid)));
+        mix(static_cast<std::size_t>(stencilFormat.value_or(MTL::PixelFormat::PixelFormatInvalid)));
+        cacheKey = k;
+    }
+
+    if (cacheKey.has_value()) {
+        // we'd like to reuse a previous value
+        if (auto it = renderPipelineStateCache.find(cacheKey.value()); it != renderPipelineStateCache.end())
+            return it->second;
     }
 
     auto desc = NS::TransferPtr(MTL::RenderPipelineDescriptor::alloc()->init());
@@ -171,9 +187,9 @@ MTLRenderPipelineStatePtr ShaderProgram::getRenderPipelineState(const gfx::Rende
         assert(false);
     }
 
-    if (reuseHash.has_value()) {
+    if (cacheKey.has_value()) {
         // store the value for future reuse
-        renderPipelineStateCache[reuseHash.value()] = rps;
+        renderPipelineStateCache[cacheKey.value()] = rps;
     }
 
     return rps;

@@ -161,6 +161,13 @@ public:
                    : std::array<float, 4>{{1.0f / util::EXTENT, 0.0f, 0.0f, static_cast<float>(demDim)}};
     }
 
+    // Isomaps : transform UV de la tuile raster basemap ({1/scale, dx/scale, dy/scale, 0}) quand une
+    // tuile ANCETRE est bindee (fallback chargement) ; {1,0,0,0} = tuile exacte (uv inchange).
+    std::array<float, 4> getDrawableMapCoords(const OverscaledTileID& tileID) const {
+        const auto it = drawableMapCoords.find(tileID);
+        return it != drawableMapCoords.end() ? it->second : std::array<float, 4>{{1.0f, 0.0f, 0.0f, 0.0f}};
+    }
+
     /**
      * @brief Per-tile DEM binding data for layers that sample elevation in their
      * vertex shaders (the native analog of maplibre-gl-js terrain.getTerrainData)
@@ -279,6 +286,10 @@ private:
     // an ancestor tile's DEM is bound); read by the terrain layer tweaker
     std::map<OverscaledTileID, std::array<float, 4>> drawableDemCoords;
 
+    // Isomaps : transform UV de la tuile raster basemap par drawable ({1,0,0,0} = tuile exacte ; sinon
+    // {1/scale, dx/scale, dy/scale, 0} vers la sous-region de l'ancetre bindee). Lu par le tweaker.
+    std::map<OverscaledTileID, std::array<float, 4>> drawableMapCoords;
+
     // Raccord des aretes : deficit de resolution DEM par arete (W,E,N,S) et resolution DEM
     // effective par tuile (zoom canonique - profondeur de l'ancetre DEM utilise).
     std::map<OverscaledTileID, std::array<float, 4>> drawableEdgeDz;
@@ -303,6 +314,27 @@ private:
 
     // Cached DEM source
     RenderSource* demSource = nullptr;
+
+    // Isomaps : source raster BASEMAP échantillonnée directement sur le maillage (raster-on-terrain,
+    // façon Mapbox) au lieu du drapage offscreen. Résolue depuis impl->basemapSourceID (explicite) ou
+    // par fallback auto (source raster drapée principale). nullptr = pas de basemap direct → drapage.
+    RenderSource* basemapSource = nullptr;
+    // Textures raster basemap indexées par id de tuile, reconstruites une fois par update (O(1) au
+    // lookup, au lieu d'un scan O(N²) par tuile terrain — critique à fort compte de tuiles).
+    std::map<UnwrappedTileID, std::shared_ptr<gfx::Texture2D>> basemapTextures;
+    void rebuildBasemapTextures();
+    // Récupère la texture raster basemap couvrant `meshTile` : la tuile de MÊME id si chargée (uv 1:1),
+    // sinon la tuile ANCETRE chargée la plus fine (fallback). Remplit `outMapCoords` avec le transform
+    // UV correspondant ({1,0,0,0} pour un match exact). Renvoie nullptr si aucune (exacte ni ancêtre).
+    std::shared_ptr<gfx::Texture2D> getBasemapTextureForTile(const UnwrappedTileID& meshTile,
+                                                             std::array<float, 4>& outMapCoords) const;
+
+public:
+    // Isomaps : true si une source basemap est désignée → le raster est échantillonné directement sur
+    // le maillage, et renderer_impl NE crée PAS de cibles de drapage (gros gain mémoire/fluidité).
+    bool hasDirectBasemap() const { return basemapSource != nullptr; }
+
+private:
 
     // DEM decode vector for the source's encoding (default: Mapbox Terrain-RGB)
     std::array<float, 4> demUnpackVector = {{6553.6f, 25.6f, 0.1f, 10000.0f}};

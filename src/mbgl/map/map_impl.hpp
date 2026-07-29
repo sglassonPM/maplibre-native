@@ -110,7 +110,10 @@ public:
     std::unique_ptr<StillImageRequest> stillImageRequest;
 
     double tileLodMinRadius = 3;
-    double tileLodScale = 1;
+    // Isomaps : 0.4 (au lieu de 1). Le split LOD descend plus profond au premier plan (~z14 a pitch 55
+    // au lieu de z13) → plus net, en limitant le nombre de tuiles satellite chargees. 0.2 descendait a
+    // z14 mais faisait charger ~250 tuiles z16 (memoire+reseau) → ca ramait. 0.4 = compromis piqué/fluidité.
+    double tileLodScale = 0.4;
     // Isomaps : seuil abaisse a 0 -> variable-zoom des qu'on incline, pour TOUTES les sources.
     // Au defaut 60deg, a pitch 45-60 le lointain etait couvert au zoom plein : (1) le terrain
     // explosait en tuiles -> crash memoire, (2) surtout le terrain (force a 0) et le satellite
@@ -119,7 +122,12 @@ public:
     // -> une tuile satellite par tuile terrain, drapage complet, et cover borne.
     double tileLodPitchThreshold = 0.0;
     double tileLodZoomShift = 0;
-    TileLodMode tileLodMode = TileLodMode::Default;
+    // Isomaps: Distance (et non Default). En Default, le cover à zoom variable est PLAFONNÉ au zoom
+    // du centre (maxZoom = z) → à fort pitch le premier plan (proche caméra) reçoit des tuiles au
+    // zoom du centre, trop grossières = satellite/relief flous au sol. Distance lève ce plafond
+    // (maxZoom = zoomRange.max) → le premier plan descend plus profond = net, pendant que le lointain
+    // reste peu profond. Terrain ET sources partagent ce cover (même tileLodMode) → pas de trous.
+    TileLodMode tileLodMode = TileLodMode::Distance;
 };
 
 // Forward declaration of this method is required for the MapProjection class

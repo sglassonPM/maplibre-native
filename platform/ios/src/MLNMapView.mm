@@ -664,6 +664,24 @@ public:
   return elevation ? *elevation : NAN;
 }
 
+- (NSString *)isomapsTerrainDebug {
+  if (!_rendererFrontend) {
+    return @"no-frontend";
+  }
+  mbgl::Renderer *renderer = _rendererFrontend->getRenderer();
+  if (!renderer) {
+    return @"no-renderer";
+  }
+  std::array<int, 5> d = renderer->isomapsTerrainDebug();
+  return [NSString stringWithFormat:@"terrain=%d mesh=%d targets=%d draping=%d skipped=%d", d[0], d[1], d[2], d[3], d[4]];
+}
+
+- (void)isomapsReduceMemoryUse {
+  if (_rendererFrontend) {
+    _rendererFrontend->reduceMemoryUse();
+  }
+}
+
 - (void)commonInitWithOptions:(MLNMapOptions *)mlnMapoptions {
   if (mlnMapoptions == nil) {
     mlnMapoptions = [[MLNMapOptions alloc] init];
@@ -2221,6 +2239,13 @@ public:
     // large, puis -0.12 par niveau de zoom, plancher 0.18.
     CGFloat damping = 0.6 - (kZoom - 12.0) * 0.12; // z12->0.6, z13->0.48, z15->0.24, z16+->0.18
     damping = MAX(0.18, MIN(0.6, damping));
+    // Isomaps — facteur PITCH : au-dela de ~40deg l'effet rasant fait avancer enormement (on balaie
+    // beaucoup de terrain -> retrace massif de tuiles). On ralentit progressivement : 40deg->1.0,
+    // 85deg->0.3 (l'avance devient confortable a fort pitch, sans depasser le chargement des tuiles).
+    const CGFloat kPitch = (CGFloat)self.camera.pitch;
+    CGFloat pitchFactor = 1.0 - MAX(0.0, (kPitch - 40.0)) / 45.0 * 0.7;
+    pitchFactor = MAX(0.3, MIN(1.0, pitchFactor));
+    damping *= pitchFactor;
     delta.x *= damping;
     delta.y *= damping;
     MLNMapCamera *toCamera = [self cameraByPanningWithTranslation:delta panGesture:pan];

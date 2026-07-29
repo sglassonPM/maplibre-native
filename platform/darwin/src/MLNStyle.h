@@ -314,6 +314,19 @@ MLN_EXPORT
  */
 - (void)isomapsSetTerrainSource:(NSString *)sourceIdentifier exaggeration:(double)exaggeration;
 
+/**
+ Isomaps — comme ci-dessus, mais désigne EXPLICITEMENT la source raster basemap échantillonnée
+ directement sur le maillage terrain (au lieu d'un drapage offscreen par tuile = coûteux). Passer
+ `nil` pour `basemapSource` → fallback auto (source raster drapée principale).
+
+ @param sourceIdentifier Identifiant de la source `raster-dem` (élévation).
+ @param basemapSource Identifiant de la source raster de fond (satellite/scan/topo), ou `nil` (auto).
+ @param exaggeration Multiplicateur d'exagération du relief (1.0 = échelle réelle).
+ */
+- (void)isomapsSetTerrainSource:(NSString *)sourceIdentifier
+                  basemapSource:(nullable NSString *)basemapSource
+                   exaggeration:(double)exaggeration;
+
 /** Isomaps — désactive le terrain 3D (revient à un rendu plat). */
 - (void)isomapsRemoveTerrain;
 

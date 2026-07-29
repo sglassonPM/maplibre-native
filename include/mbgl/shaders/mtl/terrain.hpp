@@ -20,9 +20,11 @@ struct alignas(16) TerrainDrawableUBO {
     /*  0 */ float4x4 matrix;
     /* 64 */ float4 dem_coords;
     /* 80 */ float4 edge_dz; // deficit de resolution DEM de la voisine sur chaque arete (W,E,N,S)
-    /* 96 */
+    /* 96 */ float4 map_coords; // Isomaps : transform UV tuile raster ancetre {1/scale, dx/scale, dy/scale, 0}
+    /* 112 */ float4 fog_params; // Isomaps BRUME : camera en repere local tuile (xy, unites 0..8192) + metres/unite (z)
+    /* 128 */
 };
-static_assert(sizeof(TerrainDrawableUBO) == 6 * 16, "wrong size");
+static_assert(sizeof(TerrainDrawableUBO) == 8 * 16, "wrong size");
 
 struct alignas(16) TerrainTilePropsUBO {
     /*  0 */ float2 dem_tl;
@@ -66,6 +68,9 @@ struct FragmentStage {
     float4 position [[position, invariant]];
     float2 uv;
     float elevation;
+    float fogDist;   // Isomaps : distance horizontale reelle (metres) du sommet a la camera, pour la brume
+    float2 tileUV;   // Isomaps DIAG : uv LOCAL 0..1 dans la tuile (pour le contour de tuile)
+    float dbgZoom;   // Isomaps DIAG : zoom de la tuile (pour la couleur par niveau)
 };
 
 FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
@@ -80,6 +85,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     // The mesh was generated with coordinates from 0 to EXTENT (8192)
     float2 pos = float2(vertx.pos.xy);
     float2 uv = pos / 8192.0;
+    // Isomaps : si la tuile raster basemap exacte n'est pas chargee, une tuile ANCETRE (plus grossiere)
+    // est bindee ; on remappe l'uv sur la sous-region correspondante. {1,0,0,0} = tuile exacte (no-op).
+    uv = uv * drawable.map_coords.x + drawable.map_coords.yz;
 
     // Decode the DEM and interpolate in meters via the shared helper (the packed
     // Terrain-RGB/Terrarium DEM cannot be hardware-filtered, so it is sampled
@@ -126,14 +134,37 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     // de LOD (edge_dz > 0), la ou le raccord laisse un residu a couvrir. Sur les 99 % d'aretes
     // qui s'accordent deja, la jupe est quasi nulle -> plus de rideaux visibles a fort pitch.
     // dzX/dzY viennent du raccord ci-dessus (deficit de resolution DEM de la voisine).
-    const float skirtFactor = (max(dzX, dzY) > 0.0) ? 1.0 : 0.05;
-    const float ele_delta = (float(vertx.pos.z) == 1.0) ? props.elevation_offset * skirtFactor : 0.0;
+    // Isomaps : jupe modulée PAR BORD et proportionnelle à l'exagération (le crack est en mètres
+    // exagérés, comme elevation). Aux frontières de LOD (edge_dz>0) le résidu du raccord d'arête est
+    // grand → jupe profonde (×4.5). Hors frontière, les bords « accordés » gardent quand même un
+    // léger décalage DEM (échantillonnage/floats) qui doit être couvert → jupe modérée (×0.3), pas
+    // quasi nulle (sinon micro-blancs qui reviennent en terrain vallonné). Effectif à exagération
+    // 1.2 : ~43 m aux frontières, ~2,9 m ailleurs (≈ le test 40 m validé, avec margin). Base = 8 m
+    // (Vulkan/Android l'appliquent pleine sur tous les bords, cf. tweaker) → non régressée.
+    const float skirtFactor = (max(dzX, dzY) > 0.0) ? 4.5 : 0.3;
+    const float ele_delta = (float(vertx.pos.z) == 1.0)
+                                ? props.elevation_offset * skirtFactor * props.exaggeration
+                                : 0.0;
     float4 position = drawable.matrix * float4(pos.x, pos.y, elevation - ele_delta, 1.0);
+
+    // Isomaps reversed-Z : remap la profondeur clip de GL [-1,1] vers Metal [0,1] INVERSE (near->ndc 1,
+    // far->ndc 0). z' = 0.5*(w - z). Le lointain tombe vers 0, zone de haute precision du Depth32Float ->
+    // supprime l'effondrement de precision a fort pitch (tuiles lointaines passant DEVANT les proches) SANS
+    // remonter le near (donc aucun clipping en navigation). Paire avec GreaterEqual (mtl/drawable.cpp) +
+    // clear main pass = 0 (renderer_impl.cpp). Le flicker etait un bug de cover independant (hysteresis).
+    position.z = 0.5 * (position.w - position.z);
+
+    // Isomaps BRUME : distance horizontale reelle (metres) du sommet a la camera. La camera est fournie
+    // dans le repere local de la tuile (fog_params.xy en unites 0..8192), fog_params.z = metres/unite.
+    const float fogDist = length(pos - drawable.fog_params.xy) * drawable.fog_params.z;
 
     return {
         .position  = position,
         .uv        = uv,
         .elevation = elevation,
+        .fogDist   = fogDist,
+        .tileUV    = pos / 8192.0,
+        .dbgZoom   = drawable.fog_params.w,
     };
 }
 
@@ -144,7 +175,41 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
 #if defined(OVERDRAW_INSPECTOR)
     return half4(1.0);
 #endif
-    return half4(mapTexture.sample(mapSampler, in.uv));
+    const float4 tex = mapTexture.sample(mapSampler, in.uv);
+
+    // Isomaps BRUME atmospherique (facon Mapbox) : net jusqu'a ~fogStart, dense vers ~fogEnd, plafonnee
+    // a fogMax pour que les sommets lointains (100-120 km) restent des SILHOUETTES brumeuses, pas un mur
+    // opaque. Fondu quadratique (perspective aerienne : monte doucement puis s'accelere).
+    constexpr float fogStart = 8000.0;   // m : plein detail en deca (~8 km)
+    constexpr float fogEnd = 55000.0;    // m : brume ~pleine (~55 km)
+    constexpr float fogMax = 0.85;       // opacite max (garde les silhouettes au-dela)
+    const half3 fogColor = half3(0.72, 0.78, 0.84); // bleu-gris desature atmospherique
+    float f = clamp((in.fogDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
+    f = f * f * fogMax;
+    half3 rgb = mix(half3(tex.rgb), fogColor, half(f));
+
+    // Isomaps DIAG — visualisation du LOD : teinte par niveau de zoom de la tuile + contour.
+    // Légende : z≤8 bleu · z9-10 cyan · z11 vert · z12 jaune · z13 orange · z14 rouge.
+    // DÉSACTIVÉE (#if 0) — repasser à #if 1 pour la réafficher en cas de besoin de debug LOD.
+#if 0
+    {
+        const float z = in.dbgZoom;
+        half3 zc;
+        if (z <= 8.5)       zc = half3(0.15, 0.30, 0.95);
+        else if (z <= 9.5)  zc = half3(0.10, 0.65, 0.95);
+        else if (z <= 10.5) zc = half3(0.10, 0.85, 0.85);
+        else if (z <= 11.5) zc = half3(0.20, 0.90, 0.30);
+        else if (z <= 12.5) zc = half3(0.95, 0.90, 0.15);
+        else if (z <= 13.5) zc = half3(1.00, 0.55, 0.10);
+        else                zc = half3(1.00, 0.15, 0.15);
+        rgb = mix(rgb, zc, half(0.40));
+        // Contour de tuile (uv local proche d'un bord) — liseré sombre.
+        const float2 dedge = min(in.tileUV, 1.0 - in.tileUV);
+        if (min(dedge.x, dedge.y) < 0.006) rgb = half3(0.05, 0.05, 0.05);
+    }
+#endif
+
+    return half4(rgb, half(tex.a));
 }
 )";
 };

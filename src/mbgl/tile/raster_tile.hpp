@@ -38,6 +38,10 @@ public:
 
     void cancel() override;
 
+    // Isomaps : accès au bucket (comme RasterDEMTile) pour échantillonner la texture de la tuile
+    // directement sur le maillage terrain (raster-on-terrain). nullptr si pas encore parsé.
+    RasterBucket* getBucket() const { return bucket.get(); }
+
 private:
     void markObsolete();
 

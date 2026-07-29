@@ -2329,6 +2329,20 @@ of north, the map will automatically snap to exact north.
  */
 - (double)isomapsTerrainElevationAtCoordinate:(CLLocationCoordinate2D)coordinate;
 
+/**
+ Isomaps DIAG — état réel du terrain, indépendant du DEM. Format `"terrain=%d mesh=%d targets=%d"`.
+ `terrain=1` = un RenderTerrain est actif (même sans DEM chargé). Sert à prouver une fuite de terrain
+ après transition vers un style non-3D, là où l'altitude renvoie NAN faute de DEM.
+ */
+- (NSString *)isomapsTerrainDebug;
+
+/**
+ Isomaps — force un flush des ressources GPU (largue les tuiles/buckets des sources et les render
+ targets de drapage, appelle Context::reduceMemoryUsage). Utilisé au retour d'un style 3D pour
+ balayer un éventuel état GPU résiduel du drapage.
+ */
+- (void)isomapsReduceMemoryUse;
+
 @end
 
 NS_ASSUME_NONNULL_END

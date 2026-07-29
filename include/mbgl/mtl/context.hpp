@@ -80,7 +80,10 @@ public:
     /// Called at the end of a frame.
     void performCleanup() override;
 
-    void reduceMemoryUsage() override {}
+    // Isomaps : réinitialise l'état GPU transitoire du Context laissé par une session de drapage
+    // terrain (voir impl dans context.cpp). Corps hors-ligne car il détruit des objets Metal dont
+    // le type complet n'est pas visible dans toutes les TU qui incluent ce header.
+    void reduceMemoryUsage() override;
 
     gfx::UniqueDrawableBuilder createDrawableBuilder(std::string name) override;
     gfx::UniformBufferPtr createUniformBuffer(const void* data,

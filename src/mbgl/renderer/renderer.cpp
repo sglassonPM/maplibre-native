@@ -106,6 +106,10 @@ std::optional<double> Renderer::queryTerrainElevation(const LatLng& latLng) cons
     return impl->orchestrator.queryTerrainElevation(latLng);
 }
 
+std::array<int, 5> Renderer::isomapsTerrainDebug() const {
+    return impl->orchestrator.isomapsTerrainDebug();
+}
+
 FeatureExtensionValue Renderer::queryFeatureExtensions(const std::string& sourceID,
                                                        const Feature& feature,
                                                        const std::string& extension,
