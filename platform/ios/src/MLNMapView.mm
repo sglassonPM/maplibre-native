@@ -764,6 +764,25 @@ public:
   _mbglMap = std::make_unique<mbgl::Map>(*_rendererFrontend, *_mbglView, mapOptions,
                                          resourceOptions, clientOptions, actionJournalOptions);
 
+  // Isomaps : collision caméra/terrain — l'œil ne descend jamais sous 200 m au-dessus du sol. La fonction
+  // d'élévation interroge le renderer (queryTerrainElevation, mètres ASL) ; elle est appelée depuis le
+  // Transform sur le thread principal (gestes UIKit + rendu MTKView y sont sérialisés) → accès renderer sûr.
+  // Weak self : la lambda vit dans le Transform (donc le Map, détruit avant/avec la vue) sans cycle de retain.
+  __weak MLNMapView *weakSelf = self;
+  _mbglMap->setTerrainCameraCollision(
+      [weakSelf](const mbgl::LatLng &latLng) -> std::optional<double> {
+        MLNMapView *strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf->_rendererFrontend) {
+          return std::nullopt;
+        }
+        mbgl::Renderer *renderer = strongSelf->_rendererFrontend->getRenderer();
+        if (!renderer) {
+          return std::nullopt;
+        }
+        return renderer->queryTerrainElevation(latLng);
+      },
+      200.0);
+
   // start paused if launch into the background
   if (background) {
     self.dormant = YES;

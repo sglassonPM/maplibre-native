@@ -70,7 +70,7 @@ struct FragmentStage {
     float elevation;
     float fogDist;   // Isomaps : distance horizontale reelle (metres) du sommet a la camera, pour la brume
     float2 tileUV;   // Isomaps DIAG : uv LOCAL 0..1 dans la tuile (pour le contour de tuile)
-    float dbgZoom;   // Isomaps DIAG : zoom de la tuile (pour la couleur par niveau)
+    float fogStart;  // Isomaps BRUME : debut de brume (metres), altitude-aware, depuis fog_params.w
 };
 
 FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
@@ -164,7 +164,7 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         .elevation = elevation,
         .fogDist   = fogDist,
         .tileUV    = pos / 8192.0,
-        .dbgZoom   = drawable.fog_params.w,
+        .fogStart  = drawable.fog_params.w,
     };
 }
 
@@ -180,9 +180,9 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     // Isomaps BRUME atmospherique (facon Mapbox) : net jusqu'a ~fogStart, dense vers ~fogEnd, plafonnee
     // a fogMax pour que les sommets lointains (100-120 km) restent des SILHOUETTES brumeuses, pas un mur
     // opaque. Fondu quadratique (perspective aerienne : monte doucement puis s'accelere).
-    constexpr float fogStart = 8000.0;   // m : plein detail en deca (~8 km)
-    constexpr float fogEnd = 55000.0;    // m : brume ~pleine (~55 km)
-    constexpr float fogMax = 0.85;       // opacite max (garde les silhouettes au-dela)
+    const float fogStart = in.fogStart;         // m : debut de brume, altitude-aware (max 8 km, alt x2)
+    const float fogEnd = fogStart + 47000.0;    // m : brume ~pleine (largeur de transition ~47 km)
+    constexpr float fogMax = 0.85;              // opacite max (garde les silhouettes au-dela)
     const half3 fogColor = half3(0.72, 0.78, 0.84); // bleu-gris desature atmospherique
     float f = clamp((in.fogDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
     f = f * f * fogMax;
@@ -193,7 +193,7 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     // DÉSACTIVÉE (#if 0) — repasser à #if 1 pour la réafficher en cas de besoin de debug LOD.
 #if 0
     {
-        const float z = in.dbgZoom;
+        const float z = in.fogStart; // NB : le slot fog_params.w porte desormais fogStart, plus le zoom
         half3 zc;
         if (z <= 8.5)       zc = half3(0.15, 0.30, 0.95);
         else if (z <= 9.5)  zc = half3(0.10, 0.65, 0.95);

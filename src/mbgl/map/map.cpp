@@ -460,6 +460,11 @@ TransformState Map::getTransfromState() const {
     return impl->transform.getState();
 }
 
+void Map::setTerrainCameraCollision(std::function<std::optional<double>(const LatLng&)> elevationFn,
+                                    double minMetersAboveGround) {
+    impl->transform.setTerrainCameraCollision(std::move(elevationFn), minMetersAboveGround);
+}
+
 // MARK: - Annotations
 
 void Map::addAnnotationImage(std::unique_ptr<style::Image> image) {

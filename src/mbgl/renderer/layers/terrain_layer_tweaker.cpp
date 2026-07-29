@@ -74,6 +74,18 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
         camMercY = 0.5 - std::log((1.0 + sinLat) / (1.0 - sinLat)) / (4.0 * kPi);
     }
 
+    // Isomaps BRUME altitude-aware : la brume est basée sur la distance HORIZONTALE œil→fragment. À haute
+    // altitude, TOUT le terrain visible est loin horizontalement → la brume recouvrait tout l'écran. On
+    // repousse le DÉBUT de brume avec l'altitude : fogStart = max(8 km, altitude × 2). À 8000 m elle
+    // commence vers ~16 km → le proche/moyen reste net, le lointain (horizon) s'embrume ; à basse
+    // altitude, 8 km comme avant. Transmis par fog_params.w (ce slot portait le zoom de tuile, DIAG off).
+    // NB : le facteur ×2 est un curseur (×4 embrumait trop loin en altitude, à re-régler au besoin).
+    double camAltM = 0.0;
+    if (const auto loc = freeCam.getLocation()) {
+        camAltM = loc->altitude;
+    }
+    const float fogStartM = static_cast<float>(std::max(8000.0, camAltM * 2.0));
+
 #if MLN_UBO_CONSOLIDATION
     int i = 0;
     std::vector<TerrainDrawableUBO> drawableUBOVector(layerGroup.getDrawableCount());
@@ -111,7 +123,7 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
             .dem_coords = terrain->getDrawableDemCoords(*drawable.getTileID()),
             .edge_dz = terrain->getDrawableEdgeDz(*drawable.getTileID()),
             .map_coords = terrain->getDrawableMapCoords(*drawable.getTileID()),
-            .fog_params = {fogCamX, fogCamY, fogMPerUnit, static_cast<float>(tileID.canonical.z)}
+            .fog_params = {fogCamX, fogCamY, fogMPerUnit, fogStartM}
         };
 
 #if !MLN_UBO_CONSOLIDATION

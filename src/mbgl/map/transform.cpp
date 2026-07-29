@@ -205,6 +205,7 @@ void Transform::easeTo(const CameraOptions& inputCamera, const AnimationOptions&
             if (fov != startFov) {
                 state.setFieldOfView(util::interpolate(startFov, fov, t));
             }
+            clampEyeAboveTerrain(); // Isomaps : œil >= sol + minAGL, après tous les setters de la frame
         },
         duration);
 }
@@ -397,6 +398,7 @@ void Transform::flyTo(const CameraOptions& inputCamera,
             if (fov != startFov) {
                 state.setFieldOfView(util::interpolate(startFov, fov, k));
             }
+            clampEyeAboveTerrain(); // Isomaps : œil >= sol + minAGL, après tous les setters de la frame
         },
         duration);
 }
@@ -749,6 +751,46 @@ FreeCameraOptions Transform::getFreeCameraOptions() const {
 void Transform::setFreeCameraOptions(const FreeCameraOptions& options) {
     cancelTransitions();
     state.setFreeCameraOptions(options);
+    clampEyeAboveTerrain();
+}
+
+// MARK: - Isomaps : collision caméra / terrain
+
+void Transform::setTerrainCameraCollision(std::function<std::optional<double>(const LatLng&)> elevationFn,
+                                          double minMetersAboveGround) {
+    terrainCollisionElevationFn = std::move(elevationFn);
+    terrainCollisionMinAGL = minMetersAboveGround;
+}
+
+void Transform::clampEyeAboveTerrain() {
+    if (!terrainCollisionElevationFn || terrainCollisionMinAGL <= 0.0 || !state.valid()) {
+        return;
+    }
+    // Position 3D de l'ŒIL (pas le centre du regard) : altitude ASL + point-sol sous l'œil.
+    const FreeCameraOptions cam = state.getFreeCameraOptions();
+    const std::optional<LatLngAltitude> loc = cam.getLocation();
+    if (!loc) {
+        return;
+    }
+    // Altitude du terrain sous l'œil. nullopt (pas de DEM chargé là) = pas de contrainte cette frame.
+    const std::optional<double> ground = terrainCollisionElevationFn(loc->location);
+    if (!ground) {
+        return;
+    }
+    const double minEyeAlt = *ground + terrainCollisionMinAGL;
+    // eyeOffset = altitude de l'ŒIL AU-DESSUS du centre. L'œil = centre + offset(zoom,pitch,fov), donc cet
+    // offset est INDÉPENDANT de centerAltitude → le centerAltitude requis est ABSOLU (pas lié à l'historique)
+    // → aucune accumulation, même si un geste reporte centerAltitude via value_or(current) (cf. easeTo).
+    const double eyeOffset = loc->altitude - state.getCenterAltitude();
+    const double requiredCenterAlt = minEyeAlt - eyeOffset;
+    // Plancher naturel = 0 (l'app ne pilote pas centerAltitude ; le relief est rendu via le DEM, pas via le
+    // centre). On IMPOSE centerAltitude = max(0, requis) : décalage rigide du rig vers le haut quand l'œil
+    // serait sous le sol + minAGL (marche à tous les pitchs, y compris >90° où l'œil est sous le centre), et
+    // RETOUR à 0 dès que la contrainte ne s'applique plus → idempotent, auto-restauré, sans dérive.
+    const double target = requiredCenterAlt > 0.0 ? requiredCenterAlt : 0.0;
+    if (std::abs(target - state.getCenterAltitude()) > 0.01) {
+        state.setCenterAltitude(target);
+    }
 }
 
 } // namespace mbgl

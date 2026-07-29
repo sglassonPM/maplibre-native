@@ -134,6 +134,13 @@ public:
     FreeCameraOptions getFreeCameraOptions() const;
     void setFreeCameraOptions(const FreeCameraOptions& options);
 
+    // Isomaps : collision caméra/terrain. `elevationFn` renvoie l'altitude (m au-dessus du niveau de la
+    // mer) du terrain sous un point, ou nullopt si indisponible (pas de DEM chargé → pas de contrainte
+    // cette frame). L'œil est empêché de descendre sous `minMetersAboveGround` m AU-DESSUS DU SOL, à chaque
+    // mouvement de caméra. Injectée car le DEM vit côté render, hors du Transform. minMeters<=0 = désactivé.
+    void setTerrainCameraCollision(std::function<std::optional<double>(const LatLng&)> elevationFn,
+                                   double minMetersAboveGround);
+
     // Frustum
     void setFrustumOffset(const EdgeInsets&);
     EdgeInsets getFrustumOffset();
@@ -141,6 +148,15 @@ public:
 private:
     TransformObserver& observer;
     TransformState state;
+
+    // Isomaps collision : fonction d'élévation terrain (injectée par le frontend) + hauteur mini œil-sol.
+    std::function<std::optional<double>(const LatLng&)> terrainCollisionElevationFn;
+    double terrainCollisionMinAGL = 0.0; // mètres ; <= 0 = désactivé
+
+    // Remonte l'œil s'il passe sous terrainCollisionMinAGL m au-dessus du sol (décalage rigide via
+    // centerAltitude, auto-restauré car la caméra ré-applique l'altitude naturelle à chaque frame).
+    // Appelée en fin de chaque mutation caméra (easeTo/flyTo/setFreeCameraOptions).
+    void clampEyeAboveTerrain();
 
     void startTransition(const CameraOptions&,
                          const AnimationOptions&,

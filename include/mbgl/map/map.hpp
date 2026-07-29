@@ -124,6 +124,12 @@ public:
     // Transform
     TransformState getTransfromState() const;
 
+    // Isomaps : collision caméra/terrain. Empêche l'œil de descendre sous `minMetersAboveGround` m
+    // au-dessus du sol. `elevationFn` (fournie par le frontend, car le DEM vit côté render) renvoie
+    // l'altitude terrain (m ASL) sous un point, ou nullopt si indisponible. minMeters<=0 = désactivé.
+    void setTerrainCameraCollision(std::function<std::optional<double>(const LatLng&)> elevationFn,
+                                   double minMetersAboveGround);
+
     // Annotations
     void addAnnotationImage(std::unique_ptr<style::Image>);
     void removeAnnotationImage(const std::string&);
