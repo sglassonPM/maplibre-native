@@ -664,6 +664,30 @@ public:
   return elevation ? *elevation : NAN;
 }
 
+- (double)isomapsEyeAltitudeASL {
+  if (!_mbglMap) {
+    return NAN;
+  }
+  auto loc = _mbglMap->getFreeCameraOptions().getLocation();
+  return loc ? loc->altitude : NAN;
+}
+
+- (double)isomapsEyeAltitudeAGL {
+  if (!_mbglMap || !_rendererFrontend) {
+    return NAN;
+  }
+  auto loc = _mbglMap->getFreeCameraOptions().getLocation();
+  if (!loc) {
+    return NAN;
+  }
+  mbgl::Renderer *renderer = _rendererFrontend->getRenderer();
+  if (!renderer) {
+    return NAN;
+  }
+  std::optional<double> ground = renderer->queryTerrainElevation(loc->location);
+  return ground ? (loc->altitude - *ground) : NAN;
+}
+
 - (NSString *)isomapsTerrainDebug {
   if (!_rendererFrontend) {
     return @"no-frontend";
@@ -781,7 +805,7 @@ public:
         }
         return renderer->queryTerrainElevation(latLng);
       },
-      200.0);
+      300.0);
 
   // start paused if launch into the background
   if (background) {

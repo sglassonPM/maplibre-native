@@ -3064,9 +3064,10 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
         [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t) {
             MBXViewController *s = weakSelf;
             if (!s) { [t invalidate]; return; }
-            s.isomapsPitchLabel.text = [NSString stringWithFormat:@"pitch %.0f° · alt %.0f m · maillage %d · sat %d",
-                                        s.mapView.camera.pitch, s.mapView.camera.altitude,
-                                        isomapsDebugMeshTileCount(), isomapsDebugSatTileCount()];
+            s.isomapsPitchLabel.text =
+                [NSString stringWithFormat:@"pitch %.0f° · œil %.0f m · /sol %.0f m · maillage %d",
+                                           s.mapView.camera.pitch, [s.mapView isomapsEyeAltitudeASL],
+                                           [s.mapView isomapsEyeAltitudeAGL], isomapsDebugMeshTileCount()];
         }];
     }
     self.isomapsPitchLabel.text = [NSString stringWithFormat:@"pitch %.0f°", mapView.camera.pitch];

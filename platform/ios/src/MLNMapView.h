@@ -2330,6 +2330,19 @@ of north, the map will automatically snap to exact north.
 - (double)isomapsTerrainElevationAtCoordinate:(CLLocationCoordinate2D)coordinate;
 
 /**
+ Isomaps — VRAIE altitude de l'ŒIL (m au-dessus du niveau de la mer), lue depuis la caméra libre du
+ moteur (inclut le décalage de la collision terrain). Diffère de `camera.altitude` (dérivée du zoom,
+ aveugle au relief). `NAN` si indisponible.
+ */
+- (double)isomapsEyeAltitudeASL;
+
+/**
+ Isomaps — hauteur de l'œil AU-DESSUS DU SOL (m) : altitude œil réelle − altitude du terrain sous l'œil.
+ `NAN` si indisponible. Sert à afficher/vérifier l'anti-collision (doit rester ≥ seuil).
+ */
+- (double)isomapsEyeAltitudeAGL;
+
+/**
  Isomaps DIAG — état réel du terrain, indépendant du DEM. Format `"terrain=%d mesh=%d targets=%d"`.
  `terrain=1` = un RenderTerrain est actif (même sans DEM chargé). Sert à prouver une fuite de terrain
  après transition vers un style non-3D, là où l'altitude renvoie NAN faute de DEM.

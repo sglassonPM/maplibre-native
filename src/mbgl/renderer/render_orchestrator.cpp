@@ -769,8 +769,8 @@ std::optional<double> RenderOrchestrator::queryTerrainElevation(const LatLng& la
     if (!renderTerrain || !renderTerrain->isEnabled()) {
         return std::nullopt;
     }
-    // Un zoom fin quelconque : getElevation retombe sur le DEM d'ancêtre réellement chargé, donc
-    // la valeur exacte du zoom n'importe pas tant qu'elle couvre la position.
+    // Isomaps : le zoom de la requête n'importe plus — getElevation (render_terrain) trouve la tuile DEM
+    // chargée la plus fine CONTENANT le point (ancêtre ou plus fine). z14 suffit à localiser le point.
     constexpr uint8_t z = 14;
     const TileCoordinate tc = TileCoordinate::fromLatLng(z, latLng.wrapped());
     const auto tx = static_cast<int64_t>(std::floor(tc.p.x));

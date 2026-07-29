@@ -772,12 +772,83 @@ void Transform::clampEyeAboveTerrain() {
     if (!loc) {
         return;
     }
-    // Altitude du terrain sous l'œil. nullopt (pas de DEM chargé là) = pas de contrainte cette frame.
-    const std::optional<double> ground = terrainCollisionElevationFn(loc->location);
-    if (!ground) {
-        return;
+    // Élévation de référence = MAX du terrain dans un CERCLE de ~200 m autour du centre (le point regardé,
+    // toujours dans le frustum chargé). Un seul point se ferait piéger par une falaise/aiguille juste à côté
+    // (ex. face au Grandes Jorasses, 1000 m de verticalité) : on échantillonne le centre + 8 points à 200 m
+    // et on garde le plus haut (9 lookups DEM = quelques µs, négligeable). Le terrain sous l'œil est ajouté
+    // au max s'il est chargé (souvent hors frustum → 0). Le terrain sous l'œil seul n'était pas fiable.
+    const LatLng eyeLL = loc->location;
+    const LatLng center = state.getLatLng();
+    constexpr double kPi = std::numbers::pi;
+    const double cosLat = std::cos(eyeLL.latitude() * kPi / 180.0);
+    const double mLat = (center.latitude() - eyeLL.latitude()) * 111320.0;
+    const double mLng = (center.longitude() - eyeLL.longitude()) * 111320.0 * cosLat;
+    const double distEC = std::sqrt(mLat * mLat + mLng * mLng);
+    std::optional<double> refGround;
+    const auto accMax = [&refGround](const std::optional<double>& e) {
+        if (e && *e > 1.0 && (!refGround || *e > *refGround)) refGround = e; // >1 m : ignore le 0 hors-frustum
+    };
+    const double dLat = 200.0 / 111320.0;
+    const double dLng = 200.0 / (111320.0 * cosLat);
+    const auto sampleCircle = [&](const LatLng& p) {
+        accMax(terrainCollisionElevationFn(p));
+        for (int i = 0; i < 8; ++i) {
+            const double a = static_cast<double>(i) * (kPi / 4.0);
+            accMax(terrainCollisionElevationFn(
+                LatLng(p.latitude() + dLat * std::sin(a), p.longitude() + dLng * std::cos(a))));
+        }
+    };
+    // Look-at PROCHE (< 3 km : vue plongeante / zoom avant) = le terrain DROIT SOUS toi, chargé (dans le
+    // frustum). Indispensable au zoom : la sonde œil→centre a une portée nulle quand le centre est très
+    // proche (distEC < 300 m) → sans ça refGround=NUL pendant le zoom et l'œil plonge dans le sol. Couvre
+    // aussi le regard ~vertical (distEC ≈ 0).
+    if (distEC <= 3000.0) {
+        sampleCircle(center);
     }
-    const double minEyeAlt = *ground + terrainCollisionMinAGL;
+    if (distEC > 1.0) {
+        // Le terrain juste sous l'œil est HORS FRUSTUM (non chargé → 0). On cherche le terrain VISIBLE le
+        // plus proche (1er point chargé le long du regard œil→centre), puis on échantillonne ~1,5 km au-delà :
+        // c'est le relief sous la trajectoire PROCHE. Ni le sommet lointain (→ bond de l'œil), ni du non-chargé.
+        const double ux = mLng / distEC, uy = mLat / distEC;
+        const auto pointAhead = [&](double d) {
+            return LatLng(eyeLL.latitude() + uy * d / 111320.0, eyeLL.longitude() + ux * d / (111320.0 * cosLat));
+        };
+        double d0 = -1.0;
+        for (double d = 300.0; d <= 6000.0 && d <= distEC; d += 300.0) {
+            const auto e = terrainCollisionElevationFn(pointAhead(d));
+            if (e && *e > 1.0) {
+                d0 = d;
+                break;
+            }
+        }
+        if (d0 > 0.0) {
+            for (double d = d0; d <= d0 + 1500.0 && d <= distEC; d += 250.0) {
+                sampleCircle(pointAhead(d));
+            }
+        }
+    }
+    // Maintien avec décroissance : monte instantanément au max sondé, décroît ~2 %/appel vers le sample
+    // courant (ou 0 si NUL) → contrainte CONTINUE malgré les trous NUL de la sonde (terrain hors frustum).
+    if (refGround && *refGround > collisionRefGroundHold) {
+        collisionRefGroundHold = *refGround;
+    }
+    const double decayTarget = refGround ? *refGround : 0.0;
+    if (collisionRefGroundHold > decayTarget) {
+        collisionRefGroundHold -= (collisionRefGroundHold - decayTarget) * 0.02;
+    }
+    // 🧪 DIAG collision (à retirer)
+    static int isoCollDiag = 0;
+    if ((isoCollDiag++ % 30) == 0) {
+        Log::Warning(Event::General,
+                     "🏔️ COLLISION eyeAlt=" + std::to_string(static_cast<int>(loc->altitude)) + " refGround=" +
+                         (refGround ? std::to_string(static_cast<int>(*refGround)) : std::string("NUL")) +
+                         " hold=" + std::to_string(static_cast<int>(collisionRefGroundHold)) +
+                         " centerAlt=" + std::to_string(static_cast<int>(state.getCenterAltitude())));
+    }
+    if (collisionRefGroundHold < 1.0) {
+        return; // aucun terrain vu récemment → pas de contrainte
+    }
+    const double minEyeAlt = collisionRefGroundHold + terrainCollisionMinAGL;
     // eyeOffset = altitude de l'ŒIL AU-DESSUS du centre. L'œil = centre + offset(zoom,pitch,fov), donc cet
     // offset est INDÉPENDANT de centerAltitude → le centerAltitude requis est ABSOLU (pas lié à l'historique)
     // → aucune accumulation, même si un geste reporte centerAltitude via value_or(current) (cf. easeTo).
@@ -788,8 +859,12 @@ void Transform::clampEyeAboveTerrain() {
     // serait sous le sol + minAGL (marche à tous les pitchs, y compris >90° où l'œil est sous le centre), et
     // RETOUR à 0 dès que la contrainte ne s'applique plus → idempotent, auto-restauré, sans dérive.
     const double target = requiredCenterAlt > 0.0 ? requiredCenterAlt : 0.0;
-    if (std::abs(target - state.getCenterAltitude()) > 0.01) {
-        state.setCenterAltitude(target);
+    const double cur = state.getCenterAltitude();
+    // Monte INSTANTANÉMENT (sécurité anti-pénétration quand le relief se dresse) mais DESCEND en douceur
+    // (~10 %/appel ≈ 0,4 s) pour ne pas retomber d'un coup dans un sommet qu'on vient de franchir.
+    const double newAlt = target >= cur ? target : cur + (target - cur) * 0.1;
+    if (std::abs(newAlt - cur) > 0.01) {
+        state.setCenterAltitude(newAlt);
     }
 }
 

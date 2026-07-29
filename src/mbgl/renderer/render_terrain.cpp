@@ -675,15 +675,23 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID, float x, float 
         return 0.0f;
     }
 
-    // Find the DEM tile matching the requested tile, or its closest available ancestor
+    // Isomaps : position normalisée [0,1[ du point demandé, indépendante du zoom de la requête.
+    const double nQ = static_cast<double>(1ull << tileID.canonical.z);
+    const double gx = (static_cast<double>(tileID.canonical.x) + static_cast<double>(x) / util::EXTENT) / nQ;
+    const double gy = (static_cast<double>(tileID.canonical.y) + static_cast<double>(y) / util::EXTENT) / nQ;
+
+    // On prend la tuile DEM chargée la PLUS FINE qui CONTIENT le point — ancêtre OU plus fine. L'ancien
+    // test (isChildOf) ne matchait QUE les ancêtres → renvoyait 0 dès que seules des tuiles PLUS FINES que
+    // la requête étaient chargées (ex. au zoom avant : z16 chargées, requête z14 → 0 → collision qui lâche).
     const auto renderTiles = demSource->getRawRenderTiles();
     const RenderTile* demRenderTile = nullptr;
     int bestZoom = -1;
     for (const auto& renderTile : *renderTiles) {
-        const UnwrappedTileID& candidate = renderTile.id;
-        if ((candidate == tileID || tileID.isChildOf(candidate)) &&
-            static_cast<int>(candidate.canonical.z) > bestZoom) {
-            bestZoom = candidate.canonical.z;
+        const auto& c = renderTile.id.canonical;
+        const double nC = static_cast<double>(1ull << c.z);
+        if (gx >= c.x / nC && gx < (c.x + 1) / nC && gy >= c.y / nC && gy < (c.y + 1) / nC &&
+            static_cast<int>(c.z) > bestZoom) {
+            bestZoom = c.z;
             demRenderTile = &renderTile;
         }
     }
@@ -705,16 +713,16 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID, float x, float 
         return 0.0f;
     }
 
-    // Map the tile-local coordinate into the (possibly ancestor) DEM tile
-    const UnwrappedTileID& demTileID = demRenderTile->id;
-    const auto off = demSubTileOffset(tileID.canonical, demTileID.canonical);
-    const float xInDem = (off.dx * util::EXTENT + x) / off.scale;
-    const float yInDem = (off.dy * util::EXTENT + y) / off.scale;
+    // Sous-position [0,1[ du point dans la tuile DEM trouvée (ancêtre ou fine, peu importe).
+    const auto& demC = demRenderTile->id.canonical;
+    const double nD = static_cast<double>(1ull << demC.z);
+    const double subX = gx * nD - static_cast<double>(demC.x);
+    const double subY = gy * nD - static_cast<double>(demC.y);
 
     // Bilinear interpolation of the DEM texels, as in maplibre-gl-js Terrain.getDEMElevation
     const float dim = static_cast<float>(demData.dim);
-    const float px = util::clamp(xInDem / util::EXTENT * dim, 0.0f, dim - 1.0f);
-    const float py = util::clamp(yInDem / util::EXTENT * dim, 0.0f, dim - 1.0f);
+    const float px = util::clamp(static_cast<float>(subX) * dim, 0.0f, dim - 1.0f);
+    const float py = util::clamp(static_cast<float>(subY) * dim, 0.0f, dim - 1.0f);
     const auto x0 = static_cast<int32_t>(std::floor(px));
     const auto y0 = static_cast<int32_t>(std::floor(py));
     const float fx = px - static_cast<float>(x0);

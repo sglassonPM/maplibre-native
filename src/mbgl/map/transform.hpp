@@ -152,6 +152,10 @@ private:
     // Isomaps collision : fonction d'élévation terrain (injectée par le frontend) + hauteur mini œil-sol.
     std::function<std::optional<double>(const LatLng&)> terrainCollisionElevationFn;
     double terrainCollisionMinAGL = 0.0; // mètres ; <= 0 = désactivé
+    // Maintien de l'élévation de référence : la sonde perd souvent le terrain (sous l'œil = hors frustum
+    // → NUL une frame sur deux). On retient le max récent et on le laisse décroître lentement → contrainte
+    // CONTINUE (comble les trous, garde l'œil au-dessus le temps de franchir un relief qu'on vient de voir).
+    double collisionRefGroundHold = 0.0;
 
     // Remonte l'œil s'il passe sous terrainCollisionMinAGL m au-dessus du sol (décalage rigide via
     // centerAltitude, auto-restauré car la caméra ré-applique l'altitude naturelle à chaque frame).
