@@ -412,6 +412,34 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         }
     }
 
+    // Isomaps : décode AUSSI l'aperçu DEM grossier RETENU (non rendu, cf. tile_pyramid) dans demTextures, pour
+    // qu'il serve d'ANCÊTRE au maillage. Sinon, au pan en altitude, les mailles dont le DEM fin n'est pas encore
+    // chargé retombent sur le placeholder PLAT (plaques grises visibles quand on se balade). Avec l'ancêtre
+    // grossier : relief flou, jamais plat. Borné aux niveaux grossiers (z<=10) → coût minime (décodage 1×,
+    // ensuite simple refresh de lastUsed). Le DEM fin exact, quand il arrive, prime (demTier 2 > 1).
+    if (const auto* loaded = demSource->getLoadedTiles()) {
+        for (const auto& [oid, tilePtr] : *loaded) {
+            if (oid.canonical.z > 10 || !tilePtr || tilePtr->kind != Tile::Kind::RasterDEM) {
+                continue;
+            }
+            const UnwrappedTileID uid(oid.wrap, oid.canonical);
+            if (auto it = demTextures.find(uid); it != demTextures.end()) {
+                it->second.lastUsed = demUpdateCounter; // garde-le vivant (anti-éviction)
+                continue;
+            }
+            auto* demTile = static_cast<RasterDEMTile*>(tilePtr.get());
+            auto* bucket = demTile->getBucket();
+            const auto* demData = bucket ? &bucket->getDEMData() : nullptr;
+            if (demData && demData->getImagePtr() && !demData->getImagePtr()->size.isEmpty()) {
+                demUnpackVector = demData->getUnpackVector();
+                demDim = demData->dim;
+                if (auto texture = createDEMTexture(context, *demData)) {
+                    demTextures[uid] = {texture, demData->dim, demUpdateCounter};
+                }
+            }
+        }
+    }
+
     // Couverture du maillage : cf. computeMeshCover (tileCover + altitude STABLE + hysteresis).
     // Publiee dans lastRenderedMeshTiles ; renderer_impl la relit pour les cibles de drapage
     // (update() precede render() dans la frame -> drapage et maillage strictement identiques).

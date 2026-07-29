@@ -159,9 +159,25 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
         // DEM : anti-collision (élévation hors écran). Raster (satellite) : fallback grossier TOUJOURS
         // chargé pour combler les trous « bleus » quand le fin est évincé/pas encore chargé (vue élargie).
         if (type == SourceType::RasterDEM || type == SourceType::Raster) {
-            constexpr int32_t overviewZoom = 10; // ~150 m/px : assez fin pour ne pas moyenner un sommet vers
-            if (overviewZoom >= static_cast<int32_t>(zoomRange.min) && overviewZoom < idealZoom) {
-                overviewTiles = util::tileCover(tileCoverParameters, overviewZoom, zoomRange); // le bas (clip)
+            // Isomaps : aperçu à DEUX niveaux grossiers, en cover PLAT (sans elevation provider).
+            //  • z7 (~1 km/px) : REPLI FIABLE. Peu de tuiles (une z7 = ~300 km) → charge vite même sur le proxy
+            //    satellite lent → toujours dispo. Sans lui, quand le satellite fin ne suit pas (vue large/pitchée
+            //    = 100-200 tuiles à texturer), le repli tombait sur le MONDE z2 = aplat olive. Avec z7 le repli
+            //    est du satellite régional flou (Alpes reconnaissables), le fin sharpe quand il arrive.
+            //  • z10 (~150 m/px) : repli plus fin quand il charge (proche).
+            // Le cover PLAT casse aussi le deadlock œuf-poule au RECUL : une région fraîchement révélée dont le
+            // DEM n'est pas chargé est vue « plate » → le cover terrain-aware la juge hors-écran à fort pitch →
+            // jamais demandée → DEM jamais chargé (blob figé). Le cover plat demande tout le frustum au sol → le
+            // DEM grossier charge → l'élévation devient connue → le cover fin (terrain-aware) se débloque.
+            {
+                util::TileCoverParameters flatCoverParameters = tileCoverParameters;
+                flatCoverParameters.elevationProvider = nullptr;
+                for (const int32_t overviewZoom : {7, 10}) {
+                    if (overviewZoom >= static_cast<int32_t>(zoomRange.min) && overviewZoom < idealZoom) {
+                        const auto ov = util::tileCover(flatCoverParameters, overviewZoom, zoomRange);
+                        overviewTiles.insert(overviewTiles.end(), ov.begin(), ov.end());
+                    }
+                }
             }
             // Satellite : FILET GLOBAL — le MONDE ENTIER à z2 (16 tuiles), construit en dur (PAS via tileCover,
             // qui reste borné au frustum et rate le vrai horizon à fort pitch). Garantit qu'une tuile z2 ancêtre
