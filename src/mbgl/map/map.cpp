@@ -465,6 +465,19 @@ void Map::setTerrainCameraCollision(std::function<std::optional<double>(const La
     impl->transform.setTerrainCameraCollision(std::move(elevationFn), minMetersAboveGround);
 }
 
+void Map::enforceTerrainCameraConstraints() {
+    // Isomaps : renormalisation + collision appliquées HORS transitions (displayLink). Repeint uniquement
+    // si quelque chose a réellement bougé (sinon boucle de rendu permanente = batterie).
+    const double zoomBefore = impl->transform.getZoom();
+    const double altBefore = impl->transform.getState().getCenterAltitude();
+    impl->transform.renormalizeCenterAltitudeToTerrain();
+    impl->transform.clampEyeAboveTerrain();
+    if (std::abs(impl->transform.getZoom() - zoomBefore) > 1e-9 ||
+        std::abs(impl->transform.getState().getCenterAltitude() - altBefore) > 1e-9) {
+        impl->onUpdate();
+    }
+}
+
 // MARK: - Annotations
 
 void Map::addAnnotationImage(std::unique_ptr<style::Image> image) {

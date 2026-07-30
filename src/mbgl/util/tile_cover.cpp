@@ -223,7 +223,18 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
                                  transform, z, {transform.getSize().width / 2.0, transform.getSize().height / 2.0})
                                  .p;
 
-    const vec3 centerCoord = {{centerPoint.x, centerPoint.y, 0.0}};
+    // Elevation has to reach the frustum in the aabb's units (tiles at zoom z).
+    // Renderable heights are in meters and Camera::getWorldToCamera scales them by
+    // pixelsPerMeter = worldSize / (cos(lat) * 2pi * R); pixels are then tiles at
+    // zoom z scaled by numTiles / worldSize, so worldSize cancels out.
+    const double metersToTileUnits = numTiles / (std::cos(util::deg2rad(transform.getLatLng().latitude())) *
+                                                 util::M2PI * util::EARTH_RADIUS_M);
+
+    // Isomaps : le CENTRE du LOD est élevé à centerAltitude (≈ terrain au centre via la renormalisation),
+    // plus au niveau de la MER. Sinon le numérateur de la formule (camToCenterDistance, ASL) restait gonflé
+    // en montagne pendant que le dénominateur (distance tuile) est en AGL → DOUBLE boost avec le zoom
+    // AGL-vrai → sur-division ×4-16 (≈200 tuiles à 150 m/sol au lieu de ~15) → mémoire/chargement explosés.
+    const vec3 centerCoord = {{centerPoint.x, centerPoint.y, transform.getCenterAltitude() * metersToTileUnits}};
 
     assert(transform.getFreeCameraOptions().position);
     const vec3 cameraPositionMercator = *transform.getFreeCameraOptions().position;
@@ -232,13 +243,6 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
     const double cameraToCenterDistanceMercator = vec3Length(vec3Sub(cameraCoord, centerCoord)) / worldSize;
 
     const Frustum frustum = Frustum::fromInvProjMatrix(transform.getInvProjectionMatrix(), worldSize, z, flippedY);
-
-    // Elevation has to reach the frustum in the aabb's units (tiles at zoom z).
-    // Renderable heights are in meters and Camera::getWorldToCamera scales them by
-    // pixelsPerMeter = worldSize / (cos(lat) * 2pi * R); pixels are then tiles at
-    // zoom z scaled by numTiles / worldSize, so worldSize cancels out.
-    const double metersToTileUnits = numTiles / (std::cos(util::deg2rad(transform.getLatLng().latitude())) *
-                                                 util::M2PI * util::EARTH_RADIUS_M);
     // Isomaps : référence sol stable (terrain sous la caméra) en unités-tuile — sert au LOD AGL ci-dessous.
     const double cameraGroundZ = cameraGroundM * metersToTileUnits;
 
@@ -261,7 +265,10 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
     // donc la meme tuile de bord (maillage ET drapage), pas de desaccord. Seul le test est elargi ;
     // le maillage/placement reste inchange.
     const auto withFrustumMargin = [&](AABB box) -> AABB {
-        constexpr double kEdgeMargin = 0.5;
+        // Isomaps : 0.25 (était 0.5). Combinée à la marge d'élévation, ±50 % d'étendue par nœud sur-admettait
+        // largement hors frustum (tapis z18 ×16 la surface écran à pitch 0). 0.25 couvre toujours le liseré
+        // de bord bas à fort pitch (raison d'être de la marge) pour moitié moins de sur-admission.
+        constexpr double kEdgeMargin = 0.25;
         const double mx = (box.max[0] - box.min[0]) * kEdgeMargin;
         const double my = (box.max[1] - box.min[1]) * kEdgeMargin;
         box.min[0] -= mx;

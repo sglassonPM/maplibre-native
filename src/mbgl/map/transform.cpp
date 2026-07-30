@@ -205,6 +205,7 @@ void Transform::easeTo(const CameraOptions& inputCamera, const AnimationOptions&
             if (fov != startFov) {
                 state.setFieldOfView(util::interpolate(startFov, fov, t));
             }
+            renormalizeCenterAltitudeToTerrain(); // Isomaps : zoom AGL-vrai (vitesses de gestes correctes)
             clampEyeAboveTerrain(); // Isomaps : œil >= sol + minAGL, après tous les setters de la frame
         },
         duration);
@@ -398,6 +399,7 @@ void Transform::flyTo(const CameraOptions& inputCamera,
             if (fov != startFov) {
                 state.setFieldOfView(util::interpolate(startFov, fov, k));
             }
+            renormalizeCenterAltitudeToTerrain(); // Isomaps : zoom AGL-vrai (vitesses de gestes correctes)
             clampEyeAboveTerrain(); // Isomaps : œil >= sol + minAGL, après tous les setters de la frame
         },
         duration);
@@ -407,6 +409,20 @@ void Transform::flyTo(const CameraOptions& inputCamera,
 
 void Transform::moveBy(const ScreenCoordinate& offset, const AnimationOptions& animation) {
     ScreenCoordinate centerOffset = {offset.x, offset.y};
+
+    // Isomaps : amortissement du pan À FORT ZOOM (près du sol). La renormalisation rend déjà la vitesse
+    // « exacte » (le doigt suit le sol) ; en dessous de ~1500 m/sol on ralentit PROGRESSIVEMENT jusqu'à
+    // ×0,6 à ≤300 m — ressenti plus posé en survol rapproché (demande utilisateur), inertie comprise.
+    if (terrainCollisionElevationFn && collisionRefGroundHold > 1.0) {
+        if (const auto loc = state.getFreeCameraOptions().getLocation()) {
+            const double agl = loc->altitude - collisionRefGroundHold;
+            if (agl > 0.0 && agl < 1500.0) {
+                const double t = std::max(0.0, (agl - 300.0) / 1200.0); // 0 à ≤300 m → 1 à 1500 m
+                const double damp = 0.6 + 0.4 * t;
+                centerOffset = {centerOffset.x * damp, centerOffset.y * damp};
+            }
+        }
+    }
 
     // Reduce the offset so that it never goes past the horizon. If it goes past
     // the horizon, the pan direction is opposite of the intended direction.
@@ -762,6 +778,49 @@ void Transform::setTerrainCameraCollision(std::function<std::optional<double>(co
     terrainCollisionMinAGL = minMetersAboveGround;
 }
 
+void Transform::renormalizeCenterAltitudeToTerrain() {
+    if (!terrainCollisionElevationFn || !state.valid() || isGestureInProgress()) {
+        return; // jamais pendant un geste : la baseline du geste (zoom absolu du pinch) sauterait
+    }
+    const auto loc = state.getFreeCameraOptions().getLocation();
+    if (!loc) {
+        return;
+    }
+    const double eyeAlt = loc->altitude;
+    const LatLng c = state.getLatLng();
+    const auto ground = terrainCollisionElevationFn(c);
+    if (!ground || *ground <= 1.0) {
+        return; // terrain inconnu ici → on garde la paramétrisation courante (no-op sûr)
+    }
+    const double h0 = state.getCenterAltitude();
+    // Convergence : SAUT INSTANTANÉ pour les grands écarts — la reparamétrisation préserve la vue (œil
+    // fixe), donc aucun à-coup visuel possible. Lisser les grands deltas (ex. lancement : sol 0 → 2400 m
+    // pendant que le DEM s'affine) faisait BALAYER le zoom (14.8→17.1 sur plusieurs secondes) → chaque
+    // zoom intermédiaire déclenchait un cover complet → des centaines de tuiles chargées pour rien.
+    // Le lissage 20 % ne reste que pour le bruit fin (< 30 m) pour ne pas trembler en balade.
+    const double delta = *ground - h0;
+    const double alpha = (std::abs(delta) > 30.0) ? 1.0 : 0.2;
+    const double h1 = std::min(h0 + delta * alpha, eyeAlt - 5.0);
+    const double e0 = eyeAlt - h0;
+    const double e1 = eyeAlt - h1;
+    if (e0 <= 1.0 || e1 <= 1.0 || std::abs(h1 - h0) < 0.5) {
+        return;
+    }
+    // Reparamétrisation PURE : l'œil et la direction de visée restent STRICTEMENT fixes. Le centre glisse
+    // LE LONG DU RAYON à la nouvelle altitude (homothétie de facteur e1/e0 depuis l'œil, car l'offset
+    // horizontal œil→centre est ∝ (œil − centre) vertical à visée fixe), et le zoom compense (∝ 2^−zoom).
+    const double zoomNew = state.getZoom() + std::log2(e0 / e1);
+    if (zoomNew < state.getMinZoom() || zoomNew > state.getMaxZoom()) {
+        return; // un clamp déplacerait l'œil → on ne renormalise pas dans les bornes extrêmes
+    }
+    const LatLng eyeLL = loc->location;
+    const double s = e1 / e0;
+    const LatLng c1(eyeLL.latitude() + (c.latitude() - eyeLL.latitude()) * s,
+                    eyeLL.longitude() + (c.longitude() - eyeLL.longitude()) * s);
+    state.setLatLngZoom(c1, zoomNew);
+    state.setCenterAltitude(h1);
+}
+
 void Transform::clampEyeAboveTerrain() {
     if (!terrainCollisionElevationFn || terrainCollisionMinAGL <= 0.0 || !state.valid()) {
         return;
@@ -886,14 +945,11 @@ void Transform::clampEyeAboveTerrain() {
     if (collisionRefGroundHold > decayTarget) {
         collisionRefGroundHold -= (collisionRefGroundHold - decayTarget) * decayRate;
     }
-    // Relâche tout centerAltitude résiduel vers 0 : l'ANCIENNE approche flottait centerAltitude pour lever
-    // l'œil, ce qui DÉCOUPLE zoom et vue (le point regardé finit en l'air au-dessus du terrain → à fort zoom
-    // le frustum étroit ne croise le sol que sur un coin → reste = fond magenta). On n'y touche plus ; le
-    // relief est porté par le DEM. centerAltitude doit rester 0.
-    if (state.getCenterAltitude() > 0.01) {
-        const double relaxed = state.getCenterAltitude() * 0.5;
-        state.setCenterAltitude(relaxed > 0.5 ? relaxed : 0.0);
-    }
+    // NB : centerAltitude est désormais piloté par renormalizeCenterAltitudeToTerrain() (= terrain au
+    // centre, reparamétrisation pure qui garde l'œil fixe). L'ancienne relaxation vers 0 est retirée :
+    // elle combattrait la renormalisation. Le danger historique (magenta) venait d'un centre flotté
+    // AU-DESSUS du terrain sans compensation de zoom — la renormalisation le met PILE au terrain avec
+    // zoom compensé, donc cover et vue restent couplés.
     if (collisionRefGroundHold < 1.0) {
         return; // aucun terrain vu récemment → pas de contrainte
     }

@@ -1650,6 +1650,13 @@ public:
     return;
   }
 
+  // Isomaps : contraintes caméra↔terrain appliquées en continu (renormalisation + collision) — sinon
+  // elles ne tournent que pendant les gestes : au lancement la caméra peut rester SOUS le terrain
+  // (écran bleu) jusqu'au premier mouvement. No-op quasi gratuit ; ne repeint que si ça a corrigé.
+  if (_mbglMap) {
+    _mbglMap->enforceTerrainCameraConstraints();
+  }
+
   if (self.needsDisplayRefresh || (self.pendingCompletionBlocks.count > 0)) {
     // UIView update logic has moved into `renderSync` above, which now gets
     // triggered by a call to setNeedsDisplay.

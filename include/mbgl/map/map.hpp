@@ -127,6 +127,10 @@ public:
     // Isomaps : collision caméra/terrain. Empêche l'œil de descendre sous `minMetersAboveGround` m
     // au-dessus du sol. `elevationFn` (fournie par le frontend, car le DEM vit côté render) renvoie
     // l'altitude terrain (m ASL) sous un point, ou nullopt si indisponible. minMeters<=0 = désactivé.
+    /// Isomaps : applique renormalisation + collision HORS transitions (appelé du displayLink). Sans ça,
+    /// elles ne tournent que pendant les gestes : au lancement la caméra peut rester SOUS le terrain
+    /// (écran bleu) jusqu'au premier mouvement. No-op quasi gratuit quand rien à corriger.
+    void enforceTerrainCameraConstraints();
     void setTerrainCameraCollision(std::function<std::optional<double>(const LatLng&)> elevationFn,
                                    double minMetersAboveGround);
 

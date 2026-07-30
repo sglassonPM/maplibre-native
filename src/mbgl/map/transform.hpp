@@ -141,6 +141,15 @@ public:
     // mouvement de caméra. Injectée car le DEM vit côté render, hors du Transform. minMeters<=0 = désactivé.
     void setTerrainCameraCollision(std::function<std::optional<double>(const LatLng&)> elevationFn,
                                    double minMetersAboveGround);
+    // Remonte l'œil s'il passe sous terrainCollisionMinAGL m au-dessus du sol. Appelée en fin de chaque
+    // mutation caméra (easeTo/flyTo/setFreeCameraOptions) ET en continu via Map::enforceTerrainCameraConstraints
+    // (displayLink) — sinon, au lancement (DEM pas encore chargé), la caméra peut rester sous le terrain.
+    void clampEyeAboveTerrain();
+    /// Isomaps : reparamétrisation PURE (l'œil ne bouge pas d'un pixel) — centerAltitude glisse vers le
+    /// terrain au centre, zoom et centre compensés. Le zoom devient AGL-vrai → vitesses de pan/pinch et
+    /// ancre de rotation correctes en montagne (sinon calées sur le niveau de la mer). Jamais pendant un
+    /// geste actif (la baseline du geste sauterait).
+    void renormalizeCenterAltitudeToTerrain();
 
     // Frustum
     void setFrustumOffset(const EdgeInsets&);
@@ -161,11 +170,6 @@ private:
     // retient le MAX vu par cellule spatiale (~100 m) quand il ÉTAIT chargé (à l'écran) ; on le ressort en
     // secours quand la requête live échoue → tout relief approché récemment protège l'œil (le sol est fixe).
     std::unordered_map<int64_t, float> collisionElevCache;
-
-    // Remonte l'œil s'il passe sous terrainCollisionMinAGL m au-dessus du sol (décalage rigide via
-    // centerAltitude, auto-restauré car la caméra ré-applique l'altitude naturelle à chaque frame).
-    // Appelée en fin de chaque mutation caméra (easeTo/flyTo/setFreeCameraOptions).
-    void clampEyeAboveTerrain();
 
     void startTransition(const CameraOptions&,
                          const AnimationOptions&,
