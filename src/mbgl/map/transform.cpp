@@ -815,11 +815,45 @@ void Transform::clampEyeAboveTerrain() {
     if (distEC <= 3000.0) {
         (void)sampleElev(center);
     }
+    // Isomaps PAROI DEVANT : en plus de remplir la mémoire, détecter où le RAYON DE VISÉE perce le terrain.
+    // Zoomer avance l'œil LE LONG de ce rayon : sans cette détection, l'œil finit DANS une paroi visée (le
+    // clamp « sous l'œil » ne voit que le fond du couloir, pas la face devant → rebond puis traversée).
+    // Champ proche échantillonné FIN (75 m) : la butée à ~minAGL de la paroi exige de mesurer le perçage
+    // plus finement que la butée elle-même, sinon l'œil « rampe » à travers (quantification). Loin : 300 m.
+    std::optional<double> wallHitDist; // distance horizontale œil→perçage du rayon (m)
     if (distEC > 1.0) {
+        const double eyeAltNow = loc->altitude;
+        const double centerAltNow = state.getCenterAltitude();
         const double ux = mLng / distEC, uy = mLat / distEC;
-        for (double d = 300.0; d <= 3000.0 && d <= distEC; d += 300.0) {
-            (void)sampleElev(LatLng(eyeLL.latitude() + uy * d / 111320.0,
-                                    eyeLL.longitude() + ux * d / (111320.0 * cosLat)));
+        std::optional<double> prevD, prevGap; // probe précédent au-dessus du terrain (pour interpoler)
+        const auto probe = [&](double d) {
+            const auto e = sampleElev(LatLng(eyeLL.latitude() + uy * d / 111320.0,
+                                             eyeLL.longitude() + ux * d / (111320.0 * cosLat)));
+            if (wallHitDist || !e) {
+                return;
+            }
+            // Altitude du rayon œil→centre à la distance horizontale d (interpolation linéaire).
+            const double rayAlt = eyeAltNow - (eyeAltNow - centerAltNow) * (d / distEC);
+            const double gap = rayAlt - (*e + 40.0); // marge : perçage détecté un peu avant l'impact
+            if (gap <= 0.0) {
+                // Interpolation entre le dernier probe « au-dessus » et celui-ci → point de perçage
+                // sub-échantillon (sinon la frontière saute par pas de 75 m = butée qui tremble).
+                if (prevGap && *prevGap > 0.0) {
+                    const double f = *prevGap / (*prevGap - gap);
+                    wallHitDist = *prevD + f * (d - *prevD);
+                } else {
+                    wallHitDist = d;
+                }
+            } else {
+                prevD = d;
+                prevGap = gap;
+            }
+        };
+        for (double d = 75.0; d <= 1200.0 && d <= distEC; d += 75.0) {
+            probe(d);
+        }
+        for (double d = 1500.0; d <= 3000.0 && d <= distEC; d += 300.0) {
+            probe(d);
         }
     }
     // 2) CONTRAINTE = terrain DIRECTEMENT SOUS L'ŒIL (« le sol »), via la mémoire (souvent hors frustum).
@@ -871,7 +905,32 @@ void Transform::clampEyeAboveTerrain() {
     // « bute » au lieu de figer en montant. Idempotent (si déjà au-dessus, no-op ; borné min/maxZoom).
     const double centerAlt = state.getCenterAltitude();
     const double eyeAboveCenter = loc->altitude - centerAlt;
-    const double wantAboveCenter = minEyeAlt - centerAlt;
+    double wantAboveCenter = minEyeAlt - centerAlt;
+    // Isomaps BUTÉE PAROI : contrainte en 3D LE LONG DU RAYON DE VISÉE — PAS en horizontal vers un centre au
+    // niveau de la mer. L'ancienne version horizontale « perçait » le SOL sous l'œil à pitch faible → ratio >1
+    // à chaque frame → recul composé exponentiel (éjection à 33 km, flou pendant l'inertie). En 3D : à pitch 0
+    // le perçage = le sol sous l'œil à distance AGL (loin le long du rayon) → aucun misfire ; face à une paroi,
+    // le perçage est proche → butée. L'œil s'arrête à minAGL du perçage. Zone morte 0,5 % : on ne corrige que
+    // les violations franches (pas de micro-corrections = pas de tremblement), le sous-l'œil absolu assure la
+    // récupération si un geste a dépassé.
+    if (wallHitDist && eyeAboveCenter > 1.0 && distEC > 1.0) {
+        const double rayLen = std::sqrt(distEC * distEC + eyeAboveCenter * eyeAboveCenter); // œil→centre en 3D
+        const double hit3D = *wallHitDist * (rayLen / distEC); // distance œil→perçage LE LONG du rayon
+        const double ratio = std::min(1.25, (rayLen - hit3D + terrainCollisionMinAGL) / rayLen);
+        if (ratio > 1.005) {
+            wantAboveCenter = std::max(wantAboveCenter, eyeAboveCenter * ratio);
+            // 🧪 DIAG B1 (à retirer après validation) — uniquement quand la butée agit, throttlé.
+            static int s_wallDiag = 0;
+            if ((s_wallDiag++ % 15) == 0) {
+                Log::Warning(Event::General,
+                             "🧱 BUTÉE eyeAlt=" + std::to_string(static_cast<int>(loc->altitude)) +
+                                 " hit3D=" + std::to_string(static_cast<int>(hit3D)) +
+                                 " rayLen=" + std::to_string(static_cast<int>(rayLen)) +
+                                 " ratio=" + std::to_string(ratio) +
+                                 " zoom=" + std::to_string(state.getZoom()));
+            }
+        }
+    }
     if (eyeAboveCenter > 1.0 && wantAboveCenter > 1.0 && wantAboveCenter > eyeAboveCenter) {
         const double dz = std::log2(eyeAboveCenter / wantAboveCenter); // < 0 → dézoome juste ce qu'il faut
         const double appliedZoom = util::clamp(state.getZoom() + dz, state.getMinZoom(), state.getMaxZoom());

@@ -805,7 +805,7 @@ public:
         }
         return renderer->queryTerrainElevation(latLng);
       },
-      300.0);
+      150.0); // Isomaps : plancher 150 m au-dessus du sol (et distance de butée aux parois visées).
 
   // start paused if launch into the background
   if (background) {
