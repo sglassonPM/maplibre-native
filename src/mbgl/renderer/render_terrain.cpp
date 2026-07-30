@@ -108,7 +108,9 @@ std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(const TransformState& 
             }
             // Garde-fou : au-dela d'un plafond genereux, on tronque aux tuiles les plus proches
             // du centre (les plus grandes a l'ecran) plutot que de risquer l'OOM.
-            constexpr size_t maxMeshTiles = 700; // Isomaps : plafond ferme. 5000 laissait le dézoom incliné
+            constexpr size_t maxMeshTiles = 300; // Isomaps : plafond ferme (recalibré ère 512 : une tuile
+            // couvre 2× la portée linéaire → ~¼ du compte 256 pour la même couverture ; 700 laissait ~3 Go
+            // de textures 1024² → OOM). Historique : 5000 laissait le dézoom incliné
             // exploser (frustum jusqu'à l'horizon → OOM/crash). 700 borne le coût sans toucher aux vues
             // normales (~150-340 tuiles) ; on garde les tuiles les plus PROCHES du centre (tri par distance).
             if (out.size() > maxMeshTiles) {
@@ -167,12 +169,17 @@ std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(const TransformState& 
     // micro-mouvement rétrécissait la fenêtre → les tuiles tenues par la queue 46-60 tombaient d'un coup
     // = disparition immédiate au moindre geste. Constante = stable même en micro-mouvement. NB : c'est un
     // MASQUE ; la vraie racine (cover qui oscille, textures qui ne convergent pas) reste à traiter.
-    constexpr uint64_t HYSTERESIS_FRAMES = 60;
+    // Isomaps : fenêtre en TEMPS RÉEL (0,5 s murale) — pas en frames : au repos la carte ne repeint qu'à
+    // l'arrivée de tuiles, « 30 frames » s'étalaient sur 15-20 s réelles (maillage gonflé qui drainait
+    // lentement). 0,5 s masque toujours l'oscillation du cover (blips de quelques frames) sans empiler
+    // les niveaux traversés pendant un zoom continu (cf. OOM 236 tuiles / 3 Go).
+    constexpr double kHysteresisSeconds = 0.5;
+    const double nowS = util::MonotonicTimer::now().count();
     for (const auto& id : out) {
-        meshTileLastVisible[id] = demUpdateCounter;
+        meshTileLastVisible[id] = nowS;
     }
     for (auto it = meshTileLastVisible.begin(); it != meshTileLastVisible.end();) {
-        if (demUpdateCounter - it->second > HYSTERESIS_FRAMES) {
+        if (nowS - it->second > kHysteresisSeconds) {
             it = meshTileLastVisible.erase(it);
         } else {
             out.insert(it->first);
@@ -183,9 +190,16 @@ std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(const TransformState& 
     // Borne le cache d'altitude (l'union monotone accumule chaque tuile visitee par le DFS au
     // fil des pans) : au-dela d'un plafond genereux, on repart de zero — il se reremplit en
     // quelques frames et l'over-coverage transitoire est invisible.
-    constexpr size_t maxElevationCache = 8192;
+    // Isomaps : JAMAIS de clear TOTAL — le vidage brutal perdait TOUTES les plages d'altitude d'un coup →
+    // boîtes de frustum plates → cover effondré (maillage 8) puis reconstruit → OSCILLATION PERMANENTE au
+    // repos (8↔100 mesuré au 🧭 STATUS), métronome du « bleu à travers les tuiles ». On n'évince que les
+    // entrées FINES (z≥12, re-dérivées instantanément des tuiles chargées) et on GARDE les grossières
+    // (peu nombreuses, ce sont elles qui stabilisent les grandes zones).
+    constexpr size_t maxElevationCache = 32768;
     if (meshTileElevation.size() > maxElevationCache) {
-        meshTileElevation.clear();
+        for (auto it = meshTileElevation.begin(); it != meshTileElevation.end();) {
+            it = (it->first.z >= 12) ? meshTileElevation.erase(it) : std::next(it);
+        }
     }
 
     // Isomaps : PLAFOND FINAL (crash-safety) — appliqué APRÈS l'hystérésis, il borne le total QUOI QU'IL
@@ -194,7 +208,7 @@ std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(const TransformState& 
     // les plus proches du CENTRE écran (ce qu'on regarde) ; le lointain/hors-champ largué est de toute
     // façon noyé dans la brume. NB : ne borne pas assez pour égaler Mapbox (voir découplage drapage) —
     // ici c'est un filet anti-crash, pas l'optimisation finale.
-    constexpr size_t kMaxFinalMeshTiles = 900;
+    constexpr size_t kMaxFinalMeshTiles = 350; // recalibré ère 512 (cf. maxMeshTiles ; 900 → OOM à 3 Go)
     if (demBaseZoom > 0 && out.size() > kMaxFinalMeshTiles) {
         const auto center = TileCoordinate::fromLatLng(demBaseZoom, state.getLatLng());
         const auto dist2 = [&](const UnwrappedTileID& t) {
@@ -447,6 +461,26 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     lastRenderedMeshTiles = meshTiles;
     g_isomapsMeshTiles.store(static_cast<int>(meshTiles.size()), std::memory_order_relaxed);
     g_isomapsSatTiles.store(static_cast<int>(basemapTextures.size()), std::memory_order_relaxed);
+
+    // 🧭 STATUS (diag léger permanent) — 1 ligne / 2 s : zoom, œil, maillage, textures. Suivi longue durée
+    // (drain du maillage, charge mémoire textures) sans spam.
+    {
+        static double s_lastStatus = 0.0;
+        const double t = util::MonotonicTimer::now().count();
+        if (t - s_lastStatus > 2.0) {
+            s_lastStatus = t;
+            double eyeASL = 0.0;
+            if (const auto l = state.getFreeCameraOptions().getLocation()) {
+                eyeASL = l->altitude;
+            }
+            Log::Warning(Event::Render,
+                         "🧭 STATUS zoom=" + util::toString(state.getZoom()) +
+                             " œilASL=" + util::toString(static_cast<int>(eyeASL)) +
+                             " maillage=" + util::toString(meshTiles.size()) +
+                             " satTex=" + util::toString(basemapTextures.size()) +
+                             " demTex=" + util::toString(demTextures.size()));
+        }
+    }
 
     // Drop drawables and cached DEM textures for tiles that left the mesh tile
     // set, keeping everything else intact between frames

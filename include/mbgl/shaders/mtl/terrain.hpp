@@ -71,6 +71,9 @@ struct FragmentStage {
     float fogDist;   // Isomaps : distance horizontale reelle (metres) du sommet a la camera, pour la brume
     float2 tileUV;   // Isomaps DIAG : uv LOCAL 0..1 dans la tuile (pour le contour de tuile)
     float fogStart;  // Isomaps BRUME : debut de brume (metres), altitude-aware, depuis fog_params.w
+    float skirt;     // Isomaps JUPE : profondeur du rideau en metres (0 sur la surface). Sert a ombrer LES
+                     // SEULES jupes profondes (frontieres de LOD ~43 m) : un ombrage constant noircissait le
+                     // liseré de ~11 m present le long de CHAQUE bord a pitch 0 → quadrillage sombre.
 };
 
 FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
@@ -165,6 +168,7 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         .fogDist   = fogDist,
         .tileUV    = pos / 8192.0,
         .fogStart  = drawable.fog_params.w,
+        .skirt     = ele_delta, // profondeur de jupe (m), 0 hors jupe
     };
 }
 
@@ -187,6 +191,11 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     float f = clamp((in.fogDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
     f = f * f * fogMax;
     half3 rgb = mix(half3(tex.rgb), fogColor, half(f));
+
+    // Isomaps JUPE : ombrage PROPORTIONNEL A LA PROFONDEUR — nul jusqu'a ~15 m (les lisérés de bord normaux
+    // restent camoufles par la texture etiree, pas de quadrillage a pitch 0), plein a ~40 m (frontieres de
+    // LOD : le grand rideau strie lit comme un pli d'ombre au lieu d'un trou).
+    rgb *= half(1.0 - 0.35 * smoothstep(15.0, 40.0, in.skirt));
 
     // Isomaps DIAG — visualisation du LOD : teinte par niveau de zoom de la tuile + contour.
     // Légende : z≤8 bleu · z9-10 cyan · z11 vert · z12 jaune · z13 orange · z14 rouge.

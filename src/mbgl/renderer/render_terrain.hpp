@@ -299,7 +299,9 @@ private:
     // jugee visible. Une tuile au bord du frustum bascule dedans/dehors quand son DEM se
     // charge (sa plage d'altitude change) ; on la garde quelques frames apres sa derniere
     // apparition pour casser l'oscillation.
-    std::map<UnwrappedTileID, uint64_t> meshTileLastVisible;
+    // Isomaps : horodatage MONOTONE (secondes) de dernière visibilité — PAS un compteur de frames : au repos
+    // la carte ne repeint qu'à l'arrivée de tuiles, « 30 frames » s'étalaient sur 15-20 s réelles (drain lent).
+    std::map<UnwrappedTileID, double> meshTileLastVisible;
 
     // Dernier ensemble de tuiles reellement dessine (post-hysteresis), pour que
     // renderer_impl garde leurs cibles de drapage synchronisees avec le maillage.
@@ -353,7 +355,10 @@ private:
     // Retention cap for demTextures (~1MB per 514x514 DEM texture); entries not
     // used in the current frame are evicted least-recently-used first beyond
     // this, preventing unbounded growth while browsing (previously reached 2GB+)
-    static constexpr size_t maxDEMTextures = 96;
+    // Isomaps : 512 (~136 Mo max à 258² — inoffensif, l'OOM venait du satellite 4 Mo/tuile). 96 puis 320
+    // étaient SOUS le besoin réel mesuré (~330 au 🧭 STATUS en vue large) : toute texture qui sautait une
+    // frame d'usage était évincée puis redécodée = churn permanent + recréations de drawables en cascade.
+    static constexpr size_t maxDEMTextures = 512;
     uint64_t demUpdateCounter = 0;
 
     // See getPlaceholderDEMTexture
