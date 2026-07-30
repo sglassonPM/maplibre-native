@@ -3325,11 +3325,15 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
   // Vue RAPPROCHÉE (diagnostic flicker) : œil ~3200 m, ~8 km de la cible → DEM fin STABLE chargé,
   // couverture dense, pas de z6 grossier au bord qui oscille. Centre = vallée de Sallanches (bas,
   // ~550 m) pour ne pas embarquer la caméra (API aveugle au relief). Regard SE vers le massif.
-  // Isomaps TEST : départ pitch 0 au-dessus du Nid d'Aigle (gare TMB, ~2372 m) pour les essais netteté/jupes.
-  return [MLNMapCamera cameraLookingAtCenterCoordinate:CLLocationCoordinate2DMake(45.8547, 6.7906)
-                                        acrossDistance:600
-                                                 pitch:0
-                                               heading:0];
+  // Isomaps TEST : départ pitch 0 au-dessus du Nid d'Aigle (gare TMB, ~2372 m). ALTITUDE ASL explicite
+  // (2600 m ≈ 230 m/sol) : l'API caméra est aveugle au relief — acrossDistance:600 posait l'œil à 482 m
+  // ASL, 1900 m SOUS la montagne → écran bleu au lancement jusqu'au premier geste (collision).
+  MLNMapCamera *cam = [MLNMapCamera camera];
+  cam.centerCoordinate = CLLocationCoordinate2DMake(45.8547, 6.7906);
+  cam.altitude = 3600; // la conversion altitude→zoom rabote ~20 % (3600 → œil ~2900 ASL ≈ 500 m/sol à 2372)
+  cam.pitch = 0;
+  cam.heading = 0;
+  return cam;
 }
 
 - (void)saveCurrentMapState:(__unused NSNotification *)notification {

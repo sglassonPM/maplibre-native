@@ -128,31 +128,38 @@ std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(const TransformState& 
                 out = std::set<UnwrappedTileID>(byDist.begin(), byDist.begin() + maxMeshTiles);
             }
         }
-    }
-
-    // Isomaps direct-raster : RAFFINER le maillage là où le SATELLITE a chargé plus fin que le DEM.
-    // Le DEM plafonne le maillage à son propre zoom (ex. z14 uniforme), mais le satellite descend plus
-    // profond au premier plan (z15+, LOD variable). Résultat sans ceci : la tuile maillage z14 n'a pas
-    // de tuile satellite z14 exacte → elle retombe sur un ancêtre grossier → flou (≈30% de match exact
-    // mesuré). On ajoute les ids des tuiles satellite chargées puis expandToDeepestCover subdivise
-    // chaque tuile DEM grossière recouverte par des tuiles satellite plus profondes → le maillage
-    // ÉPOUSE le LOD du satellite au premier plan → match exact (piqué max), tandis que le DEM reste le
-    // filet frustum (aucun trou) et domine au loin. Le DEM est échantillonné en ancêtre par tuile.
-    if (basemapSource && demBaseZoom > 0) {
-        // BORNÉ : on n'ajoute QUE les tuiles satellite plus fines que le DEM et au plus +1 niveau.
-        // Sans borne, on avalait les tuiles ancêtres (placeholders z0..z13 que la source garde) →
-        // expandToDeepestCover fabriquait un escalier de tuiles grossières de z1 à z15 (n≈400,
-        // ~300 gâchées) → lag. Ici : seules les tuiles z=demBaseZoom+1 raffinent le premier plan
-        // (×4 local, borné), le DEM domine partout ailleurs → net + fluide.
-        const auto satTiles = basemapSource->getRawRenderTiles();
-        for (const auto& rt : *satTiles) {
-            const uint8_t z = rt.id.canonical.z;
-            if (z > demBaseZoom && z <= demBaseZoom + 1) {
-                out.insert(rt.id);
+        // Isomaps COARSE-FIRST (lancement) : rien de RENDU encore, mais l'aperçu DEM grossier RETENU
+        // (z7/z10) est déjà décodé (demTextures) → mailler tout de suite avec lui. Fond flou immédiat
+        // (drapé satellite z2-z10, déjà rendu) au lieu d'un écran bleu ; se raffine dès le premier rendu.
+        if (out.empty() && !demTextures.empty()) {
+            uint8_t coarseBase = 0;
+            uint8_t coarseMin = 30;
+            for (const auto& [cid, entry] : demTextures) {
+                coarseBase = std::max(coarseBase, cid.canonical.z);
+                coarseMin = std::min(coarseMin, cid.canonical.z);
+            }
+            if (coarseBase > 0) {
+                StableElevationProvider elevationProvider(demSource, getExaggeration(), meshTileElevation);
+                const util::TileCoverParameters coverParams{
+                    .transformState = state,
+                    .tileLodMinRadius = updateParameters.tileLodMinRadius,
+                    .tileLodScale = updateParameters.tileLodScale,
+                    .tileLodPitchThreshold = updateParameters.tileLodPitchThreshold,
+                    .tileLodMode = updateParameters.tileLodMode,
+                    .elevationProvider = &elevationProvider};
+                for (const auto& oid :
+                     util::tileCover(coverParams, coarseBase, Range<uint8_t>(coarseMin, coarseBase))) {
+                    out.insert(UnwrappedTileID(oid.wrap, oid.canonical));
+                }
             }
         }
-        out = expandToDeepestCover(out);
     }
+
+    // NB (Isomaps) : le « raffinement satellite » (+ expandToDeepestCover) est SUPPRIMÉ. Il datait de
+    // l'époque où le satellite (LOD variable) descendait plus fin qu'un DEM uniforme z14. Depuis que DEM
+    // et satellite partagent le même maxzoom (18) et le même LOD-AGL, le cover DEM atteint z18 tout seul —
+    // et l'expansion subdivisait en cascade les tuiles grossières chevauchées : 163 tuiles de maillage AU
+    // REPOS pour un écran qui en montre ~10 (mesuré au 🧭 STATUS) → mémoire/chargement gonflés pour rien.
 
     // NB (Isomaps) : un plafond de zoom par distance a été tenté ici pour alléger le compte au loin,
     // mais il coarsait le maillage EN DESSOUS du DEM chargé → correspondance maillage↔DEM rompue →
@@ -390,11 +397,10 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         return;
     }
 
-    // Get tiles from the DEM source
+    // Get tiles from the DEM source. Isomaps : ne PAS retourner si vide — au lancement, l'aperçu DEM
+    // grossier RETENU (z7/z10, décodé plus bas) permet déjà de mailler un fond flou (coarse-first) au
+    // lieu de laisser l'écran bleu le temps que les tuiles rendues arrivent.
     auto renderTiles = demSource->getRawRenderTiles();
-    if (renderTiles->empty()) {
-        return;
-    }
 
     // Cast to LayerGroup for addDrawable
     auto* lg = static_cast<LayerGroup*>(layerGroup.get());
@@ -404,6 +410,8 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
 
     // Decode and cache the DEM textures of loaded DEM tiles
     ++demUpdateCounter;
+    // 🧪 DIAG vanish (à retirer) — compteurs de la boucle de dessin de la frame précédente.
+    static int s_drawn = 0, s_skipBM = 0, s_skipDEM = 0;
     for (const auto& renderTile : *renderTiles) {
         const auto& tile = renderTile.getTile();
         if (tile.kind != Tile::Kind::RasterDEM) {
@@ -473,14 +481,32 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             if (const auto l = state.getFreeCameraOptions().getLocation()) {
                 eyeASL = l->altitude;
             }
+            int drawableCount = 0;
+            if (auto* lgc = static_cast<LayerGroup*>(layerGroup.get())) {
+                lgc->visitDrawables([&](gfx::Drawable&) { ++drawableCount; });
+            }
+            std::array<int, 24> meshZ{};
+            for (const auto& id : meshTiles) {
+                if (id.canonical.z < 24) ++meshZ[id.canonical.z];
+            }
+            std::string meshHisto;
+            for (int zz = 23; zz >= 0; --zz) {
+                if (meshZ[zz] > 0) meshHisto += " z" + util::toString(zz) + ":" + util::toString(meshZ[zz]);
+            }
             Log::Warning(Event::Render,
                          "🧭 STATUS zoom=" + util::toString(state.getZoom()) +
                              " œilASL=" + util::toString(static_cast<int>(eyeASL)) +
+                             " centreAlt=" + util::toString(static_cast<int>(state.getCenterAltitude())) +
                              " maillage=" + util::toString(meshTiles.size()) +
+                             " drawables=" + util::toString(drawableCount) +
+                             " dessin(d/sB/sD)=" + util::toString(s_drawn) + "/" + util::toString(s_skipBM) +
+                             "/" + util::toString(s_skipDEM) +
                              " satTex=" + util::toString(basemapTextures.size()) +
-                             " demTex=" + util::toString(demTextures.size()));
+                             " demTex=" + util::toString(demTextures.size()) + " |" + meshHisto);
         }
     }
+    // Reset des compteurs de dessin (incrémentés dans la boucle ci-dessous, lus au prochain STATUS).
+    s_drawn = s_skipBM = s_skipDEM = 0;
 
     // Drop drawables and cached DEM textures for tiles that left the mesh tile
     // set, keeping everything else intact between frames
@@ -602,6 +628,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         // Skip if the tile already has a drawable bound to its own DEM
         if (const auto existing = tilesWithDrawables.find(tileID);
             existing != tilesWithDrawables.end() && existing->second == 2) {
+            ++s_drawn;
             continue;
         }
 
@@ -641,6 +668,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                 // less jarring than a hole in the terrain)
                 demTexture = getPlaceholderDEMTexture(context);
                 if (!demTexture) {
+                    ++s_skipDEM;
                     continue;
                 }
             } else {
@@ -662,6 +690,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         if (basemapSource) {
             mapTexture = getBasemapTextureForTile(unwrapped, mapCoords);
             if (!mapTexture) {
+                ++s_skipBM;
                 continue; // ni exacte ni ancêtre chargé (rare, transitoire tout au début)
             }
         }
@@ -672,6 +701,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             const auto exMap = drawableMapCoords.find(tileID);
             const float existingMapScale = exMap != drawableMapCoords.end() ? exMap->second[0] : 1.0f;
             if (existing->second >= demTier && (!basemapSource || existingMapScale >= mapCoords[0])) {
+                ++s_drawn;
                 continue;
             }
             lg->removeDrawablesIf(
@@ -697,6 +727,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         drawableMapCoords[tileID] = mapCoords;
         auto drawable = createDrawableForTile(context, shaders, tileID, demTexture, mapTexture);
         if (drawable) {
+            ++s_drawn;
             lg->addDrawable(std::move(drawable));
             tilesWithDrawables[tileID] = demTier;
             if (depthLg) {

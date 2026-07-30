@@ -95,7 +95,10 @@ std::optional<Range<double>> StableElevationProvider::getTileElevationRange(cons
     // rejetee alors qu'un bout est encore a l'ecran -> elle disparait quand on pan vers le bas
     // (« masquee trop tot »). Appliquee au provider PARTAGE terrain+sources, donc les deux gardent
     // la meme tuile de bord : elle reste maillee ET drapee (pas de trou gris).
-    constexpr double kElevationMarginMeters = 800.0;
+    // Isomaps : 150 m (était 800). À pitch 0 le frustum s'élargit en profondeur (jusqu'au niveau de la
+    // mer) : une marge de ±800 m faisait passer des tuiles à ~1,5 km hors champ → tapis z18 de 200 tuiles
+    // au repos (mesuré) pour un écran qui en montre ~12. 150 m couvre toujours le jeu DEM/exagération.
+    constexpr double kElevationMarginMeters = 150.0;
     return Range<double>{merged.min - kElevationMarginMeters, merged.max + kElevationMarginMeters};
 }
 

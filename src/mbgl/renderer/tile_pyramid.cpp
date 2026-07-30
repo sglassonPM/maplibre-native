@@ -103,7 +103,14 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
     int32_t panZoom = zoomRange.max;
 
     const std::optional<uint8_t>& sourcePrefetchZoomDelta = sourceImpl.getPrefetchZoomDelta();
-    const std::optional<uint8_t>& maxParentTileOverscaleFactor = sourceImpl.getMaxOverscaleFactorForParentTiles();
+    std::optional<uint8_t> maxParentTileOverscaleFactor = sourceImpl.getMaxOverscaleFactorForParentTiles();
+    // Isomaps : borne PAR DÉFAUT la remontée aux parents pour le Raster lourd (512@2x = 4,2 Mo/tuile).
+    // Sans borne, chaque tuile idéale fraîche CRÉE et CHARGE tous ses ancêtres jusqu'à z0 (cascade
+    // mesurée : +1 Go et satTex 47→193 au premier mouvement). 4 niveaux suffisent : au-delà, le filet
+    // z2/z7/z10 retenu en permanence assure le fallback de drapage sans nouvelles requêtes.
+    if (!maxParentTileOverscaleFactor && type == SourceType::Raster) {
+        maxParentTileOverscaleFactor = 4;
+    }
     const Duration minimumUpdateInterval = sourceImpl.getMinimumTileUpdateInterval();
     const bool isVolatile = sourceImpl.isVolatile();
 
