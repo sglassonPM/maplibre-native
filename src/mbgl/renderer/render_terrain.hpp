@@ -83,6 +83,7 @@ public:
     /// RenderOrchestrator pour que le cover des SOURCES utilise la meme altitude que le maillage
     /// terrain : les sources demandent alors au moins ce que le terrain drape (pas de trou magenta).
     std::map<CanonicalTileID, Range<double>>& getElevationCache() { return meshTileElevation; }
+    std::set<CanonicalTileID>& getElevationFinalized() { return meshTileElevationFinal; }
 
     /**
      * @brief Update terrain rendering (create/update drawables)
@@ -309,6 +310,9 @@ private:
 
     // Plage d'altitude la plus large vue par tuile — union monotone, pour un cull stable
     std::map<CanonicalTileID, Range<double>> meshTileElevation;
+    // Isomaps : ids dont la plage d'élévation vient des données propres de la tuile (cache-first possible,
+    // cf. StableElevationProvider — les plages d'ancêtre doivent continuer à se raffiner).
+    std::set<CanonicalTileID> meshTileElevationFinal;
 
 
     // Mesh resolution (vertices per side)

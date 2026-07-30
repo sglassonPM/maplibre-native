@@ -6,6 +6,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 
 namespace mbgl {
 
@@ -25,6 +26,10 @@ public:
     explicit DEMElevationProvider(const RenderSource* demSource, double exaggeration);
 
     std::optional<Range<double>> getTileElevationRange(const CanonicalTileID&) const override;
+    /// Isomaps : variante exposant le zoom de la tuile qui a fourni la réponse (la tuile elle-même ou un
+    /// ancêtre). Permet au StableElevationProvider de savoir quand une plage est DÉFINITIVE (données
+    /// propres) et peut être servie du cache sans re-balayer les tuiles chargées.
+    std::optional<Range<double>> getTileElevationRange(const CanonicalTileID&, uint8_t* outSourceZ) const;
 
 private:
     const RenderSource* demSource;
@@ -46,13 +51,19 @@ class StableElevationProvider final : public util::TileElevationProvider {
 public:
     StableElevationProvider(const RenderSource* demSource,
                             double exaggeration,
-                            std::map<CanonicalTileID, Range<double>>& cache);
+                            std::map<CanonicalTileID, Range<double>>& cache,
+                            std::set<CanonicalTileID>& finalized);
 
     std::optional<Range<double>> getTileElevationRange(const CanonicalTileID&) const override;
 
 private:
     DEMElevationProvider inner;
     std::map<CanonicalTileID, Range<double>>& cache;
+    // Isomaps : ids dont la plage vient des données PROPRES de la tuile → cache-first (plus de balayage).
+    // Les plages issues d'un ancêtre continuent d'interroger l'inner : c'est le moteur du raffinement
+    // progressif (plage grossière → fin chargé → plage précise → LOD descend). Les figer bloquait le
+    // maillage en z6-z10 pour toujours (écran marron clair).
+    std::set<CanonicalTileID>& finalized;
 };
 
 } // namespace mbgl

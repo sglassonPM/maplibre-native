@@ -253,7 +253,8 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
     if (terrainEnabled) {
         elevationProvider.emplace(getRenderSource(renderTerrain->getSourceID()),
                                   renderTerrain->getExaggeration(),
-                                  renderTerrain->getElevationCache());
+                                  renderTerrain->getElevationCache(),
+                                  renderTerrain->getElevationFinalized());
     }
     tileParameters.elevationProvider = terrainEnabled ? &*elevationProvider : nullptr;
 

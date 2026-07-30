@@ -18,6 +18,7 @@
 #include <mbgl/util/exception.hpp>
 #include <mbgl/util/logging.hpp>
 #include <mbgl/util/mapbox.hpp>
+#include <mbgl/util/monotonic_timer.hpp>
 #include <mbgl/util/math.hpp>
 #include <mbgl/util/tile_coordinate.hpp>
 #include <mbgl/util/action_journal.hpp>
@@ -468,6 +469,8 @@ void Map::setTerrainCameraCollision(std::function<std::optional<double>(const La
 void Map::enforceTerrainCameraConstraints() {
     // Isomaps : renormalisation + collision appliquées HORS transitions (displayLink). Repeint uniquement
     // si quelque chose a réellement bougé (sinon boucle de rendu permanente = batterie).
+    // NB Isomaps : le throttle 20 Hz a été RÉVERTÉ (corrélé au gel du raffinement au lancement — la
+    // convergence renorm/collision a besoin de tourner à pleine cadence pendant que le DEM arrive).
     const double zoomBefore = impl->transform.getZoom();
     const double altBefore = impl->transform.getState().getCenterAltitude();
     impl->transform.renormalizeCenterAltitudeToTerrain();

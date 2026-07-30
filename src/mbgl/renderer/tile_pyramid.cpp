@@ -10,6 +10,8 @@
 #include <mbgl/util/tile_range.hpp>
 #include <mbgl/util/enum.hpp>
 #include <mbgl/util/logging.hpp>
+#include <mbgl/util/monotonic_timer.hpp>
+#include <array>
 
 #include <mbgl/algorithm/update_renderables.hpp>
 
@@ -150,6 +152,26 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
         }
 
         idealTiles = util::tileCover(tileCoverParameters, idealZoom, zoomRange, tileZoom);
+        // 🧪 DIAG SOURCES (à retirer) — que demande réellement le cover de chaque source raster ?
+        if (type == SourceType::RasterDEM || type == SourceType::Raster) {
+            static double s_lastCoverLog = 0.0;
+            const double nowT = util::MonotonicTimer::now().count();
+            if (nowT - s_lastCoverLog > 2.0) {
+                s_lastCoverLog = nowT;
+                std::array<int, 24> h{};
+                for (const auto& t : idealTiles) {
+                    if (t.canonical.z < 24) ++h[t.canonical.z];
+                }
+                std::string hs;
+                for (int zz = 23; zz >= 0; --zz) {
+                    if (h[zz] > 0) hs += " z" + util::toString(zz) + ":" + util::toString(h[zz]);
+                }
+                Log::Warning(Event::Render,
+                             std::string("🧪 COVER ") + (type == SourceType::RasterDEM ? "DEM" : "SAT") +
+                                 " idéalZoom=" + util::toString(idealZoom) +
+                                 " n=" + util::toString(idealTiles.size()) + " |" + hs);
+            }
+        }
         if (parameters.mode == MapMode::Tile && type != SourceType::Raster && type != SourceType::RasterDEM &&
             idealTiles.size() > 1) {
             mbgl::Log::Warning(mbgl::Event::General,

@@ -13,6 +13,11 @@ DEMElevationProvider::DEMElevationProvider(const RenderSource* demSource_, doubl
       exaggeration(exaggeration_) {}
 
 std::optional<Range<double>> DEMElevationProvider::getTileElevationRange(const CanonicalTileID& id) const {
+    return getTileElevationRange(id, nullptr);
+}
+
+std::optional<Range<double>> DEMElevationProvider::getTileElevationRange(const CanonicalTileID& id,
+                                                                         uint8_t* outSourceZ) const {
     if (!demSource) {
         return std::nullopt;
     }
@@ -63,6 +68,9 @@ std::optional<Range<double>> DEMElevationProvider::getTileElevationRange(const C
         return std::nullopt;
     }
 
+    if (outSourceZ) {
+        *outSourceZ = bestZoom;
+    }
     // Exaggeration is applied to the mesh in the terrain vertex shader, so the bounds
     // have to carry it too, or an exaggerated peak would still be culled.
     return Range<double>{best->getMinElevation() * exaggeration, best->getMaxElevation() * exaggeration};
@@ -70,11 +78,17 @@ std::optional<Range<double>> DEMElevationProvider::getTileElevationRange(const C
 
 StableElevationProvider::StableElevationProvider(const RenderSource* demSource_,
                                                  double exaggeration_,
-                                                 std::map<CanonicalTileID, Range<double>>& cache_)
+                                                 std::map<CanonicalTileID, Range<double>>& cache_,
+                                                 std::set<CanonicalTileID>& finalized_)
     : inner(demSource_, exaggeration_),
-      cache(cache_) {}
+      cache(cache_),
+      finalized(finalized_) {}
 
 std::optional<Range<double>> StableElevationProvider::getTileElevationRange(const CanonicalTileID& id) const {
+    // NB Isomaps : le « cache-first » perf (répondre du cache sans interroger l'inner) a été RÉVERTÉ —
+    // même restreint aux plages « définitives », il a coïncidé avec un gel du raffinement (cover convergé
+    // à ~6 tuiles → quiescence sur scène incomplète). Retour au comportement éprouvé : inner à chaque
+    // requête, union monotone, cache en secours. La perf sera re-tentée isolément, mesurée.
     const auto fresh = inner.getTileElevationRange(id);
     const auto it = cache.find(id);
     if (!fresh) {

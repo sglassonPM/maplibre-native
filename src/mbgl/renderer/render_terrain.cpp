@@ -93,7 +93,7 @@ std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(const TransformState& 
                 minLoadedZoom = std::min(minLoadedZoom, renderTile.id.canonical.z);
             }
             demBaseZoom = baseZoom;
-            StableElevationProvider elevationProvider(demSource, getExaggeration(), meshTileElevation);
+            StableElevationProvider elevationProvider(demSource, getExaggeration(), meshTileElevation, meshTileElevationFinal);
             // Meme seuil variable-zoom que les sources (abaisse a 0 dans map_impl) et cover borne.
             const util::TileCoverParameters coverParams{
                 .transformState = state,
@@ -102,7 +102,13 @@ std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(const TransformState& 
                 .tileLodPitchThreshold = updateParameters.tileLodPitchThreshold,
                 .tileLodMode = updateParameters.tileLodMode,
                 .elevationProvider = &elevationProvider};
-            const auto cover = util::tileCover(coverParams, baseZoom, Range<uint8_t>(minLoadedZoom, baseZoom));
+            // Isomaps : plancher de zoom LARGE (≤8), pas minLoadedZoom. Au repos, seul du DEM z18 reste rendu
+            // → Range(18,18) : un nœud que le LOD arrête à z16 (versant profond, plus loin → plus grossier)
+            // n'était NI émis NI subdivisé → sous-arbre abandonné → pan de terrain absent (bande bleue nette,
+            // maillage=6 mesuré). Émettre grossier est sain : DEM ancêtre (z7/z10 retenu décodé) + drapage
+            // ancêtre couvrent ces tuiles.
+            const auto cover = util::tileCover(
+                coverParams, baseZoom, Range<uint8_t>(std::min<uint8_t>(minLoadedZoom, 8), baseZoom));
             for (const auto& oid : cover) {
                 out.insert(UnwrappedTileID(oid.wrap, oid.canonical));
             }
@@ -139,7 +145,7 @@ std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(const TransformState& 
                 coarseMin = std::min(coarseMin, cid.canonical.z);
             }
             if (coarseBase > 0) {
-                StableElevationProvider elevationProvider(demSource, getExaggeration(), meshTileElevation);
+                StableElevationProvider elevationProvider(demSource, getExaggeration(), meshTileElevation, meshTileElevationFinal);
                 const util::TileCoverParameters coverParams{
                     .transformState = state,
                     .tileLodMinRadius = updateParameters.tileLodMinRadius,
@@ -206,6 +212,9 @@ std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(const TransformState& 
     if (meshTileElevation.size() > maxElevationCache) {
         for (auto it = meshTileElevation.begin(); it != meshTileElevation.end();) {
             it = (it->first.z >= 12) ? meshTileElevation.erase(it) : std::next(it);
+        }
+        for (auto it = meshTileElevationFinal.begin(); it != meshTileElevationFinal.end();) {
+            it = (it->z >= 12) ? meshTileElevationFinal.erase(it) : std::next(it);
         }
     }
 
@@ -696,7 +705,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         }
 
         // If a drawable already exists for this tile, keep it until a higher DEM quality tier — OR a
-        // finer raster basemap tile (Isomaps) — becomes available, then replace it.
+        // finer raster basemap tile (Isomaps) — becomes available.
         if (const auto existing = tilesWithDrawables.find(tileID); existing != tilesWithDrawables.end()) {
             const auto exMap = drawableMapCoords.find(tileID);
             const float existingMapScale = exMap != drawableMapCoords.end() ? exMap->second[0] : 1.0f;
@@ -704,6 +713,35 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                 ++s_drawn;
                 continue;
             }
+            // Isomaps : ÉCHANGE EN PLACE — les textures se remplacent sur le drawable existant (slots 0=DEM,
+            // 1=basemap) et le tweaker relit dem/map coords À CHAQUE frame → aucune recréation nécessaire.
+            // L'ancienne recréation (memcpy du maillage + buffers Metal, ×2 avec le jumeau depth), des
+            // dizaines de fois par seconde pendant un pan, était une source majeure de saccades.
+            drawableDemCoords[tileID] = demCoords;
+            drawableMapCoords[tileID] = mapCoords;
+            bool swapped = false;
+            lg->visitDrawables([&](gfx::Drawable& drawable) {
+                if (drawable.getTileID() && *drawable.getTileID() == tileID) {
+                    drawable.setTexture(demTexture, 0);
+                    if (basemapSource) {
+                        drawable.setTexture(mapTexture, 1);
+                    }
+                    swapped = true;
+                }
+            });
+            if (depthLg) {
+                depthLg->visitDrawables([&](gfx::Drawable& drawable) {
+                    if (drawable.getTileID() && *drawable.getTileID() == tileID) {
+                        drawable.setTexture(demTexture, 0);
+                    }
+                });
+            }
+            if (swapped) {
+                existing->second = demTier;
+                ++s_drawn;
+                continue;
+            }
+            // État incohérent (drawable introuvable) → retomber sur la recréation classique.
             lg->removeDrawablesIf(
                 [&](gfx::Drawable& drawable) { return drawable.getTileID() && *drawable.getTileID() == tileID; });
             if (depthLg) {

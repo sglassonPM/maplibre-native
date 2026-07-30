@@ -265,10 +265,10 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
     // donc la meme tuile de bord (maillage ET drapage), pas de desaccord. Seul le test est elargi ;
     // le maillage/placement reste inchange.
     const auto withFrustumMargin = [&](AABB box) -> AABB {
-        // Isomaps : 0.25 (était 0.5). Combinée à la marge d'élévation, ±50 % d'étendue par nœud sur-admettait
-        // largement hors frustum (tapis z18 ×16 la surface écran à pitch 0). 0.25 couvre toujours le liseré
-        // de bord bas à fort pitch (raison d'être de la marge) pour moitié moins de sur-admission.
-        constexpr double kEdgeMargin = 0.25;
+        // Isomaps : 0.35 (était 0.5, puis 0.25). ±50 % sur-admettait (tapis z18:200 à pitch 0) ; 0.25
+        // culled la colonne de BORD DE FUITE au pan alors qu'encore partiellement visible (bande bleue à
+        // gauche en allant à droite, ligne de tuile nette). 0.35 = compromis mesuré entre les deux.
+        constexpr double kEdgeMargin = 0.35;
         const double mx = (box.max[0] - box.min[0]) * kEdgeMargin;
         const double my = (box.max[1] - box.min[1]) * kEdgeMargin;
         box.min[0] -= mx;
