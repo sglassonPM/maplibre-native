@@ -39,7 +39,13 @@ class Frustum {
 public:
     Frustum(const std::array<vec3, 8>& points_, const std::array<vec4, 6>& planes_);
 
-    static Frustum fromInvProjMatrix(const mat4& invProj, double worldSize, double zoom, bool flippedY = false);
+    // Isomaps : `pixelsPerMeter` remet le Z des coins dans les unités-tuile des AABB élevées. La matrice de
+    // projection consomme un monde en (x,y pixels, z MÈTRES) — getWorldToCamera post-multiplie z par
+    // pixelsPerMeter — donc son inverse rend des z en mètres ; le facteur commun scale/worldSize ne vaut que
+    // pour x,y. Sans cette correction le frustum est écrasé en Z (÷pixelsPerMeter, ~×4 aux latitudes alpines)
+    // et cull À TORT toute boîte dont le terrain dépasse ~œil/4 (invisible en amont : AABB toujours à z=0).
+    static Frustum fromInvProjMatrix(
+        const mat4& invProj, double worldSize, double zoom, bool flippedY = false, double pixelsPerMeter = 1.0);
 
     // Performs conservative intersection test using separating axis theorem.
     // Some accuracy is traded for better performance. False positive rate is < 1%

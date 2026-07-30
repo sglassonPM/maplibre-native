@@ -136,7 +136,8 @@ Frustum::Frustum(const std::array<vec3, 8>& points_, const std::array<vec4, 6>& 
     }
 }
 
-Frustum Frustum::fromInvProjMatrix(const mat4& invProj, double worldSize, double zoom, bool flippedY) {
+Frustum Frustum::fromInvProjMatrix(
+    const mat4& invProj, double worldSize, double zoom, bool flippedY, double pixelsPerMeter) {
     // Define frustum corner points in normalized clip space
     std::array<vec4, 8> cornerCoords = {{vec4{{-1.0, 1.0, -1.0, 1.0}},
                                          vec4{{1.0, 1.0, -1.0, 1.0}},
@@ -153,6 +154,9 @@ Frustum Frustum::fromInvProjMatrix(const mat4& invProj, double worldSize, double
     for (auto& coord : cornerCoords) {
         matrix::transformMat4(coord, coord, invProj);
         for (auto& component : coord) component *= 1.0 / coord[3] / worldSize * scale;
+        // Isomaps : l'inverse de la projection rend x,y en PIXELS mais z en MÈTRES (cf. header) ;
+        // le facteur scale/worldSize ci-dessus n'est correct que pour x,y. Remise du z en unités-tuile.
+        coord[2] *= pixelsPerMeter;
     }
 
     std::array<vec3i, 6> frustumPlanePointIndices = {{
@@ -272,13 +276,12 @@ IntersectionResult Frustum::intersectsElevated(const AABB& aabb) const {
     if (fullyInside) {
         return IntersectionResult::Contains;
     }
-    // Broad-phase reject to trim the plane test's ~0.5% false positives, as the flat
-    // path does with `bounds`: if the boxes' extents are disjoint on any axis they
-    // cannot touch, regardless of what the planes suggested.
-    if (bounds.min[0] > aabb.max[0] || bounds.min[1] > aabb.max[1] || bounds.min[2] > aabb.max[2] ||
-        bounds.max[0] < aabb.min[0] || bounds.max[1] < aabb.min[1] || bounds.max[2] < aabb.min[2]) {
-        return IntersectionResult::Separate;
-    }
+    // Isomaps : le « broad-phase reject » (comparaison à `bounds`, l'AABB du frustum) est SUPPRIMÉ. Avec
+    // centerAltitude ≠ 0 (renormalisation AGL), il rejetait À TORT des boîtes hautes chevauchant l'altitude
+    // caméra — des tuiles À L'ÉCRAN étaient culled (prouvé au traceur 🔎 : z17 on-screen FRUSTUM-CULL alors
+    // que sa boîte contient son terrain visible, ce que les tests de PLANS, conservateurs, ne peuvent pas
+    // rejeter). Cover effondré en « bande verticale sous l'œil » → écrans bleus au pan. Les tests de plans
+    // suffisent (~0,5 % de faux positifs = quelques tuiles en trop, sans conséquence).
     return IntersectionResult::Intersects;
 }
 
