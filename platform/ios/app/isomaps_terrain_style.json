@@ -17,7 +17,8 @@
       "source": "satellite",
       "maxzoom": 21,
       "paint": {
-        "raster-opacity": 1
+        "raster-opacity": 1,
+        "raster-fade-duration": 0
       }
     },
     {

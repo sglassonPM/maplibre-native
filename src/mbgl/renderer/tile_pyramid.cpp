@@ -332,6 +332,12 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
             std::max(static_cast<double>(parameters.transformState.getSize().width) / tileSize, 1.0) *
             std::max(static_cast<double>(parameters.transformState.getSize().height) / tileSize, 1.0) *
             (parameters.transformState.getMaxZoom() - parameters.transformState.getMinZoom() + 1) * 0.5);
+        // Isomaps : le raster 512@2x pèse 4,2 Mo/tuile GPU → la formule « conservative » (× ~23 niveaux de
+        // zoom ≈ 130 tuiles) laissait ~550 Mo de cache de tuiles relâchées, par-dessus les ~300 rendues
+        // (substituts de dézoom) → Jetsam. Borné à 32 tuiles (~135 Mo). Autres types : inchangé.
+        if (type == SourceType::Raster) {
+            conservativeCacheSize = std::min<size_t>(conservativeCacheSize, 32);
+        }
         cache.setSize(conservativeCacheSize);
     } else {
         cache.setSize(0);

@@ -156,12 +156,20 @@ void RenderRasterLayer::update(gfx::ShaderRegistry& shaders,
     };
 
     const auto setTextures = [&](gfx::UniqueDrawableBuilder& builder, RasterBucket& bucket) {
-        if (bucket.image) {
-            if (!bucket.texture2d) {
+        {
+            if (bucket.image && !bucket.texture2d) {
                 if (auto tex = context.createTexture2D()) {
                     tex->setImage(bucket.image);
                     bucket.texture2d = std::move(tex);
                 }
+            }
+
+            // Isomaps : une fois la texture GPU uploadée, LIBÉRER la copie CPU du bucket (4,2 Mo/tuile en
+            // 512@2x — la garder DOUBLAIT la mémoire satellite : ~2 Go à 235 tuiles → Jetsam au dézoom).
+            // La Texture2D Metal libère déjà SA référence après upload ; le bucket gardait la sienne à vie.
+            // hasData()/les gardes acceptent désormais « texture GPU seule » (cf. raster_bucket).
+            if (bucket.texture2d && bucket.image && !bucket.texture2d->needsUpload()) {
+                bucket.image.reset();
             }
 
             if (bucket.texture2d) {
@@ -347,7 +355,8 @@ void RenderRasterLayer::update(gfx::ShaderRegistry& shaders,
                 builder = createBuilder();
             }
 
-            if (bucket.image && !builder->getTexture(idRasterImage0Texture) &&
+            // Isomaps : accepter aussi « texture GPU seule » (image CPU libérée après upload).
+            if ((bucket.image || bucket.texture2d) && !builder->getTexture(idRasterImage0Texture) &&
                 !builder->getTexture(idRasterImage1Texture)) {
                 setTextures(builder, bucket);
             };

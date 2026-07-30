@@ -102,7 +102,9 @@ void RasterBucket::setMask(TileMask&& mask_) {
 }
 
 bool RasterBucket::hasData() const {
-    return !!image;
+    // Isomaps : « a des données » = image CPU en attente OU texture GPU déjà uploadée. La copie CPU est
+    // libérée après l'upload (cf. render_raster_layer::setTextures) — la texture seule reste renderable.
+    return image || texture2d;
 }
 
 } // namespace mbgl

@@ -1,5 +1,6 @@
 #import "Mapbox.h"
 #import <QuartzCore/QuartzCore.h> // Isomaps : CACurrentMediaTime pour le chrono de chargement des tuiles
+#import <mach/mach.h>             // Isomaps : task_vm_info (empreinte mémoire réelle, 🧠 HUD)
 
 // 🧪 Isomaps DIAG (à retirer) — compteurs de tuiles du terrain, exposés par le moteur (render_terrain.cpp).
 extern "C" int isomapsDebugMeshTileCount(void);
@@ -3064,10 +3065,23 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
         [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t) {
             MBXViewController *s = weakSelf;
             if (!s) { [t invalidate]; return; }
+            // 🧠 Empreinte mémoire réelle du process (phys_footprint = ce que Jetsam compte).
+            task_vm_info_data_t vmInfo;
+            mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+            double memMB = 0;
+            if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vmInfo, &count) == KERN_SUCCESS) {
+                memMB = (double)vmInfo.phys_footprint / (1024.0 * 1024.0);
+            }
             s.isomapsPitchLabel.text =
-                [NSString stringWithFormat:@"pitch %.0f° · œil %.0f m · /sol %.0f m · maillage %d",
+                [NSString stringWithFormat:@"pitch %.0f° · œil %.0f m · /sol %.0f m · maillage %d · 🧠 %.0f Mo",
                                            s.mapView.camera.pitch, [s.mapView isomapsEyeAltitudeASL],
-                                           [s.mapView isomapsEyeAltitudeAGL], isomapsDebugMeshTileCount()];
+                                           [s.mapView isomapsEyeAltitudeAGL], isomapsDebugMeshTileCount(), memMB];
+            // Log toutes les ~2 s (8 ticks de 0,25 s) pour corréler avec 🧭 STATUS.
+            static int memTick = 0;
+            if ((memTick++ % 8) == 0) {
+                NSLog(@"🧠 MEM footprint=%.0f Mo · maillage=%d · satTex=%d", memMB,
+                      isomapsDebugMeshTileCount(), isomapsDebugSatTileCount());
+            }
         }];
     }
     self.isomapsPitchLabel.text = [NSString stringWithFormat:@"pitch %.0f°", mapView.camera.pitch];
