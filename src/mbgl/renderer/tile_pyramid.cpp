@@ -256,15 +256,30 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
     renderedTiles.clear();
 
     if (!panTiles.empty()) {
-        algorithm::updateRenderables(
-            getTileFn,
-            createTileFn,
-            retainTileFn,
-            [](const UnwrappedTileID&, Tile&) {},
-            panTiles,
-            emptyPrefetchedTiles,
-            zoomRange,
-            maxParentTileOverscaleFactor);
+        // Isomaps : pour le Raster (satellite), les panTiles (préchargement grossier, z−4) doivent être
+        // RENDUES — sinon leurs buckets ne sont jamais uploadés et le DRAPAGE terrain ne les voit pas
+        // (rebuildBasemapTextures lit les tuiles rendues) : au pan, une zone fraîche retombait sur le z2
+        // MONDIAL (quad olive) alors que son z14 préchargé était là, invisible. Autres types : inchangé.
+        if (type == SourceType::Raster) {
+            algorithm::updateRenderables(getTileFn,
+                                         createTileFn,
+                                         retainTileFn,
+                                         renderTileFn,
+                                         panTiles,
+                                         emptyPrefetchedTiles,
+                                         zoomRange,
+                                         maxParentTileOverscaleFactor);
+        } else {
+            algorithm::updateRenderables(
+                getTileFn,
+                createTileFn,
+                retainTileFn,
+                [](const UnwrappedTileID&, Tile&) {},
+                panTiles,
+                emptyPrefetchedTiles,
+                zoomRange,
+                maxParentTileOverscaleFactor);
+        }
     }
 
     // Isomaps : charge + RETIENT l'aperçu grossier. DEM = NON rendu (renderTileFn vide) : seulement interrogé

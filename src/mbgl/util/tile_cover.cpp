@@ -191,31 +191,29 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
     const auto& transform = state.transformState;
     const double numTiles = std::pow(2.0, z);
     const double worldSize = Projection::worldSize(transform.getScale());
-    const bool allowVariableZoom = transform.getPitch() > state.tileLodPitchThreshold;
+    // Isomaps : avec du TERRAIN, LOD variable TOUJOURS actif (même à pitch bas) → la finesse est gouvernée
+    // par la DISTANCE (mesurée en AGL, cf. plus bas), façon Mapbox, et non par le zoom carte (relatif à la
+    // mer → flou en montagne). Sans terrain (2D) : inchangé (seuil de pitch).
+    const bool allowVariableZoom =
+        transform.getPitch() > state.tileLodPitchThreshold || state.elevationProvider != nullptr;
     const uint8_t minZoom = allowVariableZoom ? zoomRange.min : z;
     uint8_t maxZoom = ((state.tileLodMode == TileLodMode::Distance) && allowVariableZoom) ? zoomRange.max : z;
-    // Isomaps : BORNE LA DESCENTE au pitch pour le TERRAIN. Sinon à haute altitude (map-zoom bas) le LOD
-    // Distance plonge le premier plan jusqu'au zoom max de la source alors que le sol est LOIN → des
-    // centaines de tuiles z14 absurdes (z14 vu de 16 km d'altitude). Le zoom doit suivre l'altitude : on
-    // limite la descente à z + kMaxPitchDescent niveaux. Aux vues normales (map-zoom ≥ ~11) le cap est
-    // ≥ z14 → satellite/premier plan INCHANGÉS ; il ne mord qu'aux vues hautes/lointaines (map-zoom bas).
-    // Gaté sur la présence de terrain : DEM, satellite et maillage partagent l'elevationProvider en 3D →
-    // se plafonnent ENSEMBLE (cohérence, pas de gris) ; la 2D (provider nul) reste strictement inchangée.
-    // Isomaps : plafond du zoom par ALTITUDE réelle de l'œil (le zoom suit l'altitude, quel que soit le
-    // pitch). Le cap map-zoom ne marchait pas : à fort pitch le map-zoom reste haut (basé sur le point
-    // central proche) → z14 jusqu'à l'horizon même à 8 km d'altitude. Ici on lit l'altitude en mètres et
-    // on plafonne toute la couverture. Gaté terrain → DEM+satellite+maillage plafonnent ensemble (pas de
-    // gris) ; 2D inchangée. En vue basse (œil près du sol) le plafond reste haut → premier plan net.
-    if (state.elevationProvider && maxZoom > z) {
+    // Isomaps : RÉFÉRENCE SOL STABLE pour le LOD terrain = altitude du terrain SOUS LA CAMÉRA (une seule
+    // valeur). Elle sert à mesurer les distances tuile→caméra en AGL (hauteur au-dessus du SOL, cf. bloc LOD
+    // plus bas) au lieu d'ASL (au-dessus de la mer). Ainsi le zoom suit la hauteur au-dessus du sol → net à
+    // toute altitude (façon Mapbox), avec la formule STANDARD, sans plafond ad hoc. UNE valeur (pas par tuile)
+    // et mise en cache par le StableElevationProvider → jamais nulle après le 1er chargement → pas d'oscillation.
+    double cameraGroundM = 0.0;
+    if (state.elevationProvider) {
         if (const auto loc = transform.getFreeCameraOptions().getLocation()) {
-            const double altM = loc->altitude; // mètres au-dessus du niveau de la mer
-            uint8_t altCap = 22;
-            if (altM > 20000.0)     altCap = 12;
-            else if (altM > 8000.0) altCap = 13;
-            else if (altM > 4000.0) altCap = 14;
-            else if (altM > 2000.0) altCap = 15;
-            // < 2000 m : pas de plafond (premier plan fin, borné par la source)
-            maxZoom = std::min<uint8_t>(maxZoom, std::max<uint8_t>(altCap, minZoom));
+            const auto tc = TileCoordinate::fromLatLng(static_cast<double>(z), loc->location).p;
+            const double side = static_cast<double>(1u << z);
+            if (tc.x >= 0.0 && tc.y >= 0.0 && tc.x < side && tc.y < side) {
+                if (const auto r = state.elevationProvider->getTileElevationRange(
+                        CanonicalTileID(z, static_cast<uint32_t>(tc.x), static_cast<uint32_t>(tc.y)))) {
+                    cameraGroundM = 0.5 * (r->min + r->max); // milieu → insensible à la marge ±800 m du provider
+                }
+            }
         }
     }
     const uint8_t overscaledZoom = std::max(overscaledZ.value_or(z), maxZoom);
@@ -241,6 +239,8 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
     // zoom z scaled by numTiles / worldSize, so worldSize cancels out.
     const double metersToTileUnits = numTiles / (std::cos(util::deg2rad(transform.getLatLng().latitude())) *
                                                  util::M2PI * util::EARTH_RADIUS_M);
+    // Isomaps : référence sol stable (terrain sous la caméra) en unités-tuile — sert au LOD AGL ci-dessous.
+    const double cameraGroundZ = cameraGroundM * metersToTileUnits;
 
     // The tile's bounds including its terrain: the flat footprint given the height of
     // the DEM covering it. Relief rising towards the camera takes up screen space that
@@ -337,7 +337,27 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
 
         bool shouldSplitTile;
         if (state.tileLodMode == TileLodMode::Distance) {
-            const vec3 camToTileMercator = vec3Scale(node.aabb.distanceXYZ(cameraCoord), 1.0 / worldSize);
+            // Isomaps terrain : distance mesurée en AGL (hauteur au-dessus du SOL). On élève la boîte de la
+            // tuile à la RÉFÉRENCE SOL STABLE (cameraGroundZ = terrain sous la caméra, UNE valeur → jamais
+            // nulle → PAS d'oscillation), au lieu du plan Z=0 (= mer, donc ASL → flou en montagne). Le ratio
+            // (cameraToCenterDistance ASL / distance AGL) applique la correction → la formule STANDARD MapLibre
+            // donne le bon zoom à toute altitude (façon Mapbox). Sans terrain (2D) : boîte plate, inchangé.
+            AABB lodBox = node.aabb;
+            if (state.elevationProvider) {
+                // Élévation LOCALE de la tuile (pas une réf unique — sinon en vue large les pentes à une
+                // altitude ≠ de la caméra sont mal jugées → plaques grossières). UN seul appel : le provider
+                // fait DÉJÀ le repli sur l'ancêtre le plus fin parmi TOUTES les tuiles chargées (rendues +
+                // aperçu retenu, cf. DEMElevationProvider) et le Stable garde la dernière plage connue →
+                // stable (pas de retour au plat) et local. Ultime repli : terrain sous la caméra.
+                double zc = cameraGroundZ;
+                if (const auto r = state.elevationProvider->getTileElevationRange(
+                        CanonicalTileID(node.zoom, node.x, node.y))) {
+                    zc = 0.5 * (r->min + r->max) * metersToTileUnits;
+                }
+                lodBox.min[2] = zc;
+                lodBox.max[2] = zc;
+            }
+            const vec3 camToTileMercator = vec3Scale(lodBox.distanceXYZ(cameraCoord), 1.0 / worldSize);
             const double distanceToTileMercator = vec3Length(camToTileMercator);
             const double cosPitchToTile = std::max(0.0, camToTileMercator[2] / distanceToTileMercator);
             const double pitchExponent =
@@ -346,18 +366,12 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
             shouldSplitTile = distanceToTileMercator * tileScale < std::pow(cosPitchToTile, pitchExponent) *
                                                                        cameraToCenterDistanceMercator /
                                                                        state.tileLodScale * nominalScale;
-            // Isomaps : plafond du zoom par DISTANCE ABSOLUE de la tuile à la caméra (terrain). La formule
-            // ci-dessus scale avec la distance de visée → une vue reculée sur-découpe le lointain (Mont-
-            // Blanc z14 à 21 km même œil bas). Ici on borne le zoom atteignable d'une tuile par sa vraie
-            // distance : ~z14 à 2 km, ~z11 à 21 km, quelle que soit l'altitude de l'œil. Constante à régler.
+            // Isomaps : BUDGET de tuiles du fork. La formule standard (façon Mapbox) produit le plein compte,
+            // que ce rendu ne budgète pas (Mapbox gère via culling/budget GPU) → >900 tuiles = lag. On BORNE
+            // le zoom atteignable par la distance — mais en distance AGL (déjà mesurée ci-dessus, boîte élevée
+            // à la réf sol), donc correct en montagne (le proche reste net, le lointain retombe → compte borné).
             if (state.elevationProvider) {
-                // distanceToTileMercator ≈ distance_mercator[0,1] / 512 → -log2 est décalé de +9 ; avec
-                // l'offset visé la constante nette règle la NETTETÉ du sol par distance. -4.4 → ~z16 à 2 km,
-                // ~z13 à 21 km : sol net à pitch (le mid-ground à 1-2 km n'est plus plafonné z14). Sûr en
-                // altitude : au-dessus de ~2 km le plafond par ALTITUDE (altCap) domine → pas d'explosion en
-                // vue haute ; ne mord qu'en vue basse (œil < 2 km) où la finesse est justement voulue.
-                const double tileDistMaxZoom =
-                    -std::log2(std::max(1e-9, distanceToTileMercator)) - 4.4;
+                const double tileDistMaxZoom = -std::log2(std::max(1e-9, distanceToTileMercator)) - 4.4;
                 if (static_cast<double>(node.zoom) + 1.0 > tileDistMaxZoom) shouldSplitTile = false;
             }
         } else {

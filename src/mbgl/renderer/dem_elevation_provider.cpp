@@ -17,34 +17,45 @@ std::optional<Range<double>> DEMElevationProvider::getTileElevationRange(const C
         return std::nullopt;
     }
 
-    const auto renderTiles = demSource->getRawRenderTiles();
-    if (renderTiles->empty()) {
-        return std::nullopt;
-    }
-
     // The tile's own DEM, or failing that the deepest loaded ancestor: an ancestor's
     // range covers this tile's area, so it stays conservative, just looser.
     const DEMData* best = nullptr;
     uint8_t bestZoom = 0;
-    for (const auto& renderTile : *renderTiles) {
-        const auto& tile = renderTile.getTile();
+    const auto consider = [&](const CanonicalTileID& candidate, const Tile& tile) -> bool {
         if (tile.kind != Tile::Kind::RasterDEM) {
-            continue;
+            return false;
         }
-        const auto& candidate = renderTile.id.canonical;
         const bool covers = candidate == id || id.isChildOf(candidate);
         if (!covers || (best && candidate.z <= bestZoom)) {
-            continue;
+            return false;
         }
         const auto* demTile = static_cast<const RasterDEMTile*>(&tile);
         const auto* bucket = const_cast<RasterDEMTile*>(demTile)->getBucket();
         if (!bucket) {
-            continue;
+            return false;
         }
         best = &bucket->getDEMData();
         bestZoom = candidate.z;
-        if (candidate == id) {
-            break; // exact match; nothing looser can improve on it
+        return candidate == id; // exact match; nothing looser can improve on it
+    };
+
+    // Isomaps : parcourir TOUTES les tuiles CHARGÉES (rendues + retenues hors frustum, ex. aperçu z7/z10
+    // anti-collision), pas seulement les rendues. Sinon une zone sans tuile DEM RENDUE n'a aucune plage
+    // d'altitude → son AABB de frustum reste PLAT au niveau de la mer → à fort pitch près d'un sommet la
+    // tuile est jugée hors champ → jamais demandée → jamais élevée (trou auto-entretenu : faces de sommet
+    // « transparentes », fond visible). L'aperçu grossier retenu comble exactement ce vide.
+    if (const auto* loaded = demSource->getLoadedTiles()) {
+        for (const auto& [oid, tilePtr] : *loaded) {
+            if (tilePtr && consider(oid.canonical, *tilePtr)) {
+                break;
+            }
+        }
+    } else {
+        const auto renderTiles = demSource->getRawRenderTiles();
+        for (const auto& renderTile : *renderTiles) {
+            if (consider(renderTile.id.canonical, renderTile.getTile())) {
+                break;
+            }
         }
     }
 
