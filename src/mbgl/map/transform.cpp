@@ -992,16 +992,6 @@ void Transform::clampEyeAboveTerrain() {
         const double ratio = std::min(1.25, (rayLen - hit3D + terrainCollisionMinAGL) / rayLen);
         if (ratio > 1.005) {
             wantAboveCenter = std::max(wantAboveCenter, eyeAboveCenter * ratio);
-            // 🧪 DIAG B1 (à retirer après validation) — uniquement quand la butée agit, throttlé.
-            static int s_wallDiag = 0;
-            if ((s_wallDiag++ % 15) == 0) {
-                Log::Warning(Event::General,
-                             "🧱 BUTÉE eyeAlt=" + std::to_string(static_cast<int>(loc->altitude)) +
-                                 " hit3D=" + std::to_string(static_cast<int>(hit3D)) +
-                                 " rayLen=" + std::to_string(static_cast<int>(rayLen)) +
-                                 " ratio=" + std::to_string(ratio) +
-                                 " zoom=" + std::to_string(state.getZoom()));
-            }
         }
     }
     // Isomaps : pendant un geste qui AUGMENTE le pitch, une violation se résout en BORNANT LE PITCH

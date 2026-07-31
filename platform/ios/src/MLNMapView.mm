@@ -1661,25 +1661,7 @@ public:
     // UIView update logic has moved into `renderSync` above, which now gets
     // triggered by a call to setNeedsDisplay.
     // See MLNMapViewOpenGLImpl::display() for more details
-    // ⏱ Isomaps DIAG fluidité (à retirer) : durée du tick complet (update+rendu, thread principal).
-    // Seules les frames > 20 ms comptent ; une ligne agrégée par seconde au plus.
-    CFTimeInterval isomapsT0 = CACurrentMediaTime();
     _mbglView->display();
-    double isomapsMs = (CACurrentMediaTime() - isomapsT0) * 1000.0;
-    static CFTimeInterval isomapsLastLog = 0;
-    static int isomapsSpikes = 0;
-    static double isomapsWorst = 0;
-    if (isomapsMs > 20.0) {
-      isomapsSpikes++;
-      isomapsWorst = MAX(isomapsWorst, isomapsMs);
-    }
-    CFTimeInterval isomapsNow = CACurrentMediaTime();
-    if (isomapsSpikes > 0 && isomapsNow - isomapsLastLog > 1.0) {
-      NSLog(@"⏱ TICK ×%d pire=%.0fms", isomapsSpikes, isomapsWorst);
-      isomapsSpikes = 0;
-      isomapsWorst = 0;
-      isomapsLastLog = isomapsNow;
-    }
   }
 
   // TODO: Fix

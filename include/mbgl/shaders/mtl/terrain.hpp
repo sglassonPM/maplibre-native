@@ -204,8 +204,8 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
 
     // Isomaps DIAG — visualisation du LOD : teinte par niveau de zoom de la tuile + contour.
     // Légende : z≤11 bleu · z12 cyan · z13 vert · z14 jaune · z15 orange · z16 rouge · z≥17 magenta.
-    // Zoom lu dans in.tileZoom (map_coords.w, rempli par le tweaker). Repasser à #if 0 après debug.
-#if 1
+    // Zoom lu dans in.tileZoom (map_coords.w, rempli par le tweaker). Repasser à #if 1 pour débugger.
+#if 0
     {
         const float z = in.tileZoom;
         half3 zc;

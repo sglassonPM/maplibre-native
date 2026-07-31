@@ -379,8 +379,6 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                            const std::shared_ptr<UpdateParameters>& updateParameters,
                            const RenderTree& /*renderTree*/,
                            UniqueChangeRequestVec& changes) {
-    // ⏱ Isomaps DIAG fluidité (à retirer) : durée de la mise à jour du maillage terrain.
-    const double isomapsMeshT0 = util::MonotonicTimer::now().count();
     // Find the DEM source if we haven't already
     if (!demSource && !impl->sourceID.empty()) {
         demSource = orchestrator.getRenderSource(impl->sourceID);
@@ -437,7 +435,6 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     ++demUpdateCounter;
     // 🧪 DIAG vanish (à retirer) — compteurs de la boucle de dessin de la frame précédente.
     static int s_drawn = 0, s_skipBM = 0, s_skipDEM = 0;
-    static std::vector<std::string> s_flats; // 🕳 tuiles à liaison DEM non propre (id→ancêtre/PLAT)
     for (const auto& renderTile : *renderTiles) {
         const auto& tile = renderTile.getTile();
         if (tile.kind != Tile::Kind::RasterDEM) {
@@ -535,27 +532,6 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             for (int zz = 23; zz >= 0; --zz) {
                 if (meshZ[zz] > 0) meshHisto += " z" + util::toString(zz) + ":" + util::toString(meshZ[zz]);
             }
-            // 🔗 QUALITÉ DES LIAISONS (diag B3) : tiers DEM des drawables (2 = DEM propre, 1 = ancêtre,
-            // 0 = placeholder plat) et écart de zoom du satellite lié (0 = exact, k = ancêtre k niveaux
-            // au-dessus → k crans de flou). Un paquet de tuiles en tier 1 / satAnc≥3 au REPOS = zone
-            // rabotée/délavée (sommets tronqués, rideau de skirt) par liaisons grossières, pas par le LOD.
-            int tier0 = 0, tier1 = 0, tier2 = 0;
-            std::array<int, 5> satAnc{}; // 0,1,2,3,≥4 niveaux au-dessus
-            for (const auto& [tid, tier] : tilesWithDrawables) {
-                (tier == 2 ? tier2 : (tier == 1 ? tier1 : tier0))++;
-                if (const auto mc = drawableMapCoords.find(tid); mc != drawableMapCoords.end()) {
-                    const int up = std::max(0, static_cast<int>(std::lround(-std::log2(mc->second[0]))));
-                    ++satAnc[std::min(up, 4)];
-                }
-            }
-            std::string liaisons = " 🔗 dem2/1/0=" + util::toString(tier2) + "/" + util::toString(tier1) +
-                                   "/" + util::toString(tier0) + " satAnc0/1/2/3+=" +
-                                   util::toString(satAnc[0]) + "/" + util::toString(satAnc[1]) + "/" +
-                                   util::toString(satAnc[2]) + "/" + util::toString(satAnc[3] + satAnc[4]);
-            if (!s_flats.empty()) {
-                liaisons += " 🕳";
-                for (const auto& f : s_flats) liaisons += f;
-            }
             Log::Warning(Event::Render,
                          "🧭 STATUS zoom=" + util::toString(state.getZoom()) +
                              " œilASL=" + util::toString(static_cast<int>(eyeASL)) +
@@ -565,12 +541,11 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                              " dessin(d/sB/sD)=" + util::toString(s_drawn) + "/" + util::toString(s_skipBM) +
                              "/" + util::toString(s_skipDEM) +
                              " satTex=" + util::toString(basemapTextures.size()) +
-                             " demTex=" + util::toString(demTextures.size()) + liaisons + " |" + meshHisto);
+                             " demTex=" + util::toString(demTextures.size()) + " |" + meshHisto);
         }
     }
     // Reset des compteurs de dessin (incrémentés dans la boucle ci-dessous, lus au prochain STATUS).
     s_drawn = s_skipBM = s_skipDEM = 0;
-    s_flats.clear();
 
     // Isomaps : le RETRAIT des drawables sortis du cover est déplacé APRÈS la boucle de création et
     // conditionné à la RE-COUVERTURE (cf. bloc en fin de fonction). Sous budget-temps, retirer d'abord
@@ -811,20 +786,6 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             }
         }
 
-        // 🕳 DIAG plaques plates (B3) : identité des tuiles dont la liaison DEM n'est pas propre — id +
-        // ancêtre réellement lié (ou PLAT = placeholder). Lues dans le STATUS pour vérifier côté serveur.
-        if (demTier < 2 && s_flats.size() < 3) {
-            std::string what = (demTier == 1) ? "→anc" : "→PLAT";
-            s_flats.push_back(" z" + util::toString(static_cast<int>(unwrapped.canonical.z)) + "/" +
-                              util::toString(unwrapped.canonical.x) + "/" +
-                              util::toString(unwrapped.canonical.y) + what +
-                              (demTier == 1 ? util::toString(static_cast<int>(demCoords[0] > 0
-                                                                                  ? std::lround(-std::log2(
-                                                                                        demCoords[0] * util::EXTENT))
-                                                                                  : -1))
-                                            : ""));
-        }
-
         // Isomaps : texture raster basemap (échantillonnage direct) + transform UV. On la calcule ICI,
         // avant le check de réutilisation, pour pouvoir recréer le drawable quand une tuile raster PLUS
         // FINE devient dispo (map_coords[0] : 1.0 = exacte, <1 = ancêtre ; plus grand = plus fin).
@@ -983,32 +944,6 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     }
     if (isomapsBudgetOut) {
         orchestrator.isomapsRequestRepaint(); // créations reportées → garantir une frame de continuation
-    }
-    // ⏱ Isomaps DIAG fluidité (à retirer) : pics de la mise à jour maillage, agrégé 1 s.
-    {
-        const double meshMs = (util::MonotonicTimer::now().count() - isomapsMeshT0) * 1000.0;
-        static double s_lastMeshLog = 0.0;
-        static int s_meshSpikes = 0;
-        static double s_meshWorst = 0.0;
-        static int s_meshWorstDrawn = 0;
-        if (meshMs > 4.0) {
-            s_meshSpikes++;
-            if (meshMs > s_meshWorst) {
-                s_meshWorst = meshMs;
-                s_meshWorstDrawn = s_drawn;
-            }
-        }
-        const double nowMesh = util::MonotonicTimer::now().count();
-        if (s_meshSpikes > 0 && nowMesh - s_lastMeshLog > 1.0) {
-            Log::Warning(Event::Render,
-                         "⏱ MESH ×" + std::to_string(s_meshSpikes) + " pire=" +
-                             std::to_string(static_cast<int>(s_meshWorst)) + "ms dessinés=" +
-                             std::to_string(s_meshWorstDrawn));
-            s_meshSpikes = 0;
-            s_meshWorst = 0.0;
-            s_meshWorstDrawn = 0;
-            s_lastMeshLog = nowMesh;
-        }
     }
 }
 

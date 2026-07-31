@@ -597,26 +597,6 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
         }
     }
 
-    // ⏱ Isomaps DIAG fluidité (à retirer) : durée de la phase UPDATE (covers, sources, layouts).
-    {
-        const double updMs = (util::MonotonicTimer::now().count() - startTime) * 1000.0;
-        static double s_lastUpdLog = 0.0;
-        static int s_updSpikes = 0;
-        static double s_updWorst = 0.0;
-        if (updMs > 8.0) {
-            s_updSpikes++;
-            s_updWorst = std::max(s_updWorst, updMs);
-        }
-        const double nowUpd = util::MonotonicTimer::now().count();
-        if (s_updSpikes > 0 && nowUpd - s_lastUpdLog > 1.0) {
-            Log::Warning(Event::Render,
-                         "⏱ UPDATE ×" + std::to_string(s_updSpikes) + " pire=" +
-                             std::to_string(static_cast<int>(s_updWorst)) + "ms");
-            s_updSpikes = 0;
-            s_updWorst = 0.0;
-            s_lastUpdLog = nowUpd;
-        }
-    }
     return std::make_unique<RenderTreeImpl>(std::move(renderTreeParameters),
                                             std::move(layerRenderItems),
                                             std::move(sourceRenderItems),
