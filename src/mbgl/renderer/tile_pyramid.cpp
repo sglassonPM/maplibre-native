@@ -106,13 +106,13 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
     std::optional<uint8_t> maxParentTileOverscaleFactor = sourceImpl.getMaxOverscaleFactorForParentTiles();
     // Isomaps : borne PAR DÉFAUT la remontée aux parents pour le Raster lourd (512@2x = 4,2 Mo/tuile).
     // Sans borne, chaque tuile idéale fraîche CRÉE et CHARGE tous ses ancêtres jusqu'à z0 (cascade
-    // mesurée : +1 Go et satTex 47→193 au premier mouvement). 2 niveaux (était 4) : sur une vue à fort
-    // pitch étalée sur 10 niveaux de zoom (Nyon→Alpes), 4 niveaux de parents par idéale en chargement
-    // faisaient encore culminer satTex à 331 (1,32 Go mesuré, footprint 3,3 Go → zone jetsam). Entre le
-    // fallback z-2 (flou ×4 transitoire) et le filet z2/z7/z10 retenu en permanence, le drapage garde
-    // toujours quelque chose à montrer.
+    // mesurée : +1 Go et satTex 47→193 au premier mouvement). 3 niveaux (était 4, puis 2) : à 2, en
+    // approche rapide d'un massif (idéal z17, chaîne z16/z15 pas encore arrivée), le drapage chutait
+    // directement au filet z10 → grandes masses CRÈME sans texture (mesuré au Mont-Blanc). À 3, le
+    // repli va jusqu'à z14 (~38 m/px, texturé). Coût TRANSITOIRE (parents relâchés dès l'idéale prête) ;
+    // le plateau au repos reste tenu par le prefetch coupé + cache mémoire 32.
     if (!maxParentTileOverscaleFactor && type == SourceType::Raster) {
-        maxParentTileOverscaleFactor = 2;
+        maxParentTileOverscaleFactor = 3;
     }
     const Duration minimumUpdateInterval = sourceImpl.getMinimumTileUpdateInterval();
     const bool isVolatile = sourceImpl.isVolatile();
