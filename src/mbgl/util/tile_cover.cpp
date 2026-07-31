@@ -428,16 +428,15 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
                 // ~20/40/80 km le rendu est voilé à ~15/50/85 % (fogStart 8 km + 47 km, cf. shader
                 // terrain) — inutile d'y payer des tuiles satellite de 4 Mo. Chaque palier borne le zoom
                 // du maillage (et donc du satellite drapé, une texture par tuile de maillage).
+                // CONTINU (les paliers 20/40/80 → 13/11/9 en marches d'escalier faisaient chuter une tuile
+                // de 3 niveaux d'un coup au franchissement d'un seuil : « nette puis très floue quelques ms
+                // plus tard » mesuré). Même droite d'ancrage, −2 niveaux par octave de distance au-delà de
+                // 20 km, plancher 6.
                 const double distMeters = vec3Length(camToTileTiles) / metersToTileUnits;
-                double fogZoomCap = 30.0;
-                if (distMeters > 80000.0) {
-                    fogZoomCap = 9.0;
-                } else if (distMeters > 40000.0) {
-                    fogZoomCap = 11.0;
-                } else if (distMeters > 20000.0) {
-                    fogZoomCap = 13.0;
+                if (distMeters > 20000.0) {
+                    const double fogZoomCap = std::max(6.0, 13.0 - 2.0 * std::log2(distMeters / 20000.0));
+                    if (static_cast<double>(node.zoom) + 1.0 > fogZoomCap) shouldSplitTile = false;
                 }
-                if (static_cast<double>(node.zoom) + 1.0 > fogZoomCap) shouldSplitTile = false;
             }
         } else {
             const vec3 distanceXyz = node.aabb.distanceXYZ(centerCoord);
