@@ -3353,9 +3353,9 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
 
   MBXState *currentState = [MBXStateManager sharedManager].currentState;
 
-  // Isomaps TEST — on repose la caméra de RÉFÉRENCE (pas la dernière position) au retour d'arrière-plan,
-  // pour toujours retrouver exactement le même point. Même caméra que didFinishLoadingStyle → pas de saut.
-  self.mapView.camera = [self isomapsReferenceCamera];
+  // Isomaps — au retour d'arrière-plan on GARDE la caméra courante (la reposer sur la référence
+  // téléportait l'utilisateur au point de départ à chaque changement d'app). La caméra de référence
+  // n'est posée qu'au LANCEMENT (didFinishLoadingStyle, une fois par process).
   self.mapView.showsUserLocation = currentState.showsUserLocation;
   self.mapView.userTrackingMode = currentState.userTrackingMode;
   self.mapView.showsUserHeadingIndicator = currentState.showsUserHeadingIndicator;
