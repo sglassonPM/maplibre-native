@@ -409,20 +409,10 @@ void Transform::flyTo(const CameraOptions& inputCamera,
 
 void Transform::moveBy(const ScreenCoordinate& offset, const AnimationOptions& animation) {
     ScreenCoordinate centerOffset = {offset.x, offset.y};
-
-    // Isomaps : amortissement du pan À FORT ZOOM (près du sol). La renormalisation rend déjà la vitesse
-    // « exacte » (le doigt suit le sol) ; en dessous de ~1500 m/sol on ralentit PROGRESSIVEMENT jusqu'à
-    // ×0,6 à ≤300 m — ressenti plus posé en survol rapproché (demande utilisateur), inertie comprise.
-    if (terrainCollisionElevationFn && collisionRefGroundHold > 1.0) {
-        if (const auto loc = state.getFreeCameraOptions().getLocation()) {
-            const double agl = loc->altitude - collisionRefGroundHold;
-            if (agl > 0.0 && agl < 1500.0) {
-                const double t = std::max(0.0, (agl - 300.0) / 1200.0); // 0 à ≤300 m → 1 à 1500 m
-                const double damp = 0.6 + 0.4 * t;
-                centerOffset = {centerOffset.x * damp, centerOffset.y * damp};
-            }
-        }
-    }
+    // Isomaps : l'ancien amortissement ×0,6 à ≤300 m/sol est RETIRÉ. Il compensait la dé-projection sur le
+    // plan mer qui amplifiait le pan (~5× en montagne : point visé 5× plus loin que le terrain du centre).
+    // Depuis que screenCoordinateToTileCoordinate intersecte le plan du centre, la vitesse est écran-vraie
+    // (le doigt suit le terrain, façon Mapbox) — l'amortissement par-dessus la rendait très trop lente.
 
     // Reduce the offset so that it never goes past the horizon. If it goes past
     // the horizon, the pan direction is opposite of the intended direction.
@@ -987,7 +977,39 @@ void Transform::clampEyeAboveTerrain() {
             }
         }
     }
-    if (eyeAboveCenter > 1.0 && wantAboveCenter > 1.0 && wantAboveCenter > eyeAboveCenter) {
+    // Isomaps : pendant un geste qui AUGMENTE le pitch, une violation se résout en BORNANT LE PITCH
+    // (centre et zoom fixes, réduire le pitch relève l'œil sur son arc) : le geste « bute » contre le
+    // relief au lieu d'un bras de fer dézoom-contre-geste à chaque frame (constaté : bascule au-dessus
+    // d'un versant → −3,5 niveaux de zoom en ~2 s, « je me retrouve à 6 000 m », et pitch saccadé).
+    // Hors geste de pitch (pincement/pan vers une paroi, inertie), le bridage de ZOOM reste tel quel.
+    const double pitchNow = state.getPitch();
+    const bool gestureActive = isGestureInProgress();
+    if (!gestureActive) {
+        gesturePitchCeiling = std::numeric_limits<double>::infinity(); // fin de geste : cliquet relâché
+    } else if (pitchNow > gesturePitchCeiling) {
+        // CLIQUET : la limite touchée plus tôt dans CE geste tient — fige net, aucun recalcul (le bruit de
+        // la sonde ne fait plus trembler le pitch). Réévaluation complète au prochain tick.
+        state.setPitch(gesturePitchCeiling);
+        lastConstraintPitch = gesturePitchCeiling;
+        return;
+    }
+    const double pitchPrevTick = lastConstraintPitch; // pitch au tick précédent (dernier état SAIN)
+    const bool pitchDriven = gestureActive && pitchPrevTick >= 0.0 && (pitchNow - pitchPrevTick) > 1e-4;
+    lastConstraintPitch = pitchNow;
+    if (eyeAboveCenter > 1.0 && wantAboveCenter > 1.0 && wantAboveCenter > eyeAboveCenter * 1.005) {
+        if (pitchDriven && pitchNow > 0.01) {
+            // FIGER, borné PAR CONSTRUCTION : retour au pitch du tick précédent (il était sain, et l'écart
+            // = l'incrément du geste, minuscule), armé en plafond (cliquet) pour le reste du geste. Toute
+            // correction « exacte » calculée (acos) pouvait sauter de dizaines de degrés en un tick, en
+            // plein geste → ancres du recognizer recalculées sur une caméra retournée → caméra cassée
+            // (constaté : œil à 0 m, vue planétaire). Si la violation persiste au pitch précédent (terrain
+            // affiné sous l'œil), le pitch n'augmente plus → tick suivant = voie zoom, petits pas.
+            const double hold = std::min(pitchPrevTick, pitchNow);
+            state.setPitch(hold);
+            lastConstraintPitch = hold;
+            gesturePitchCeiling = std::min(gesturePitchCeiling, hold);
+            return;
+        }
         const double dz = std::log2(eyeAboveCenter / wantAboveCenter); // < 0 → dézoome juste ce qu'il faut
         const double appliedZoom = util::clamp(state.getZoom() + dz, state.getMinZoom(), state.getMaxZoom());
         if (std::abs(appliedZoom - state.getZoom()) > 0.001) {

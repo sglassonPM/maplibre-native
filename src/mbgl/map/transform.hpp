@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <unordered_map>
 
@@ -166,6 +167,14 @@ private:
     // → NUL une frame sur deux). On retient le max récent et on le laisse décroître lentement → contrainte
     // CONTINUE (comble les trous, garde l'œil au-dessus le temps de franchir un relief qu'on vient de voir).
     double collisionRefGroundHold = 0.0;
+    // Isomaps : pitch au tick précédent de clampEyeAboveTerrain — sert à détecter qu'un geste est en train
+    // d'AUGMENTER le pitch, pour résoudre une violation terrain en bornant le PITCH (le geste bute) plutôt
+    // qu'en dézoomant (sinon : bras de fer geste/butée à chaque frame → fuite de zoom + saccades).
+    double lastConstraintPitch = -1.0;
+    // Isomaps : CLIQUET de pitch pendant un geste — au premier contact avec le relief, l'angle limite est
+    // mémorisé et TIENT jusqu'à la fin du geste (fige net). Sans lui, la limite recalculée à chaque tick
+    // suit le bruit de la sonde terrain (pas de 75 m, maintien décroissant) → pitch qui tremble.
+    double gesturePitchCeiling = std::numeric_limits<double>::infinity();
     // Mémoire d'élévation : le terrain sous l'œil est souvent hors frustum (non chargé → requête = 0). On
     // retient le MAX vu par cellule spatiale (~100 m) quand il ÉTAIT chargé (à l'écran) ; on le ressort en
     // secours quand la requête live échoue → tout relief approché récemment protège l'œil (le sol est fixe).
