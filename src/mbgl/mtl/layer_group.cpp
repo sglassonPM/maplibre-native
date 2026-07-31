@@ -11,6 +11,10 @@
 #include <mbgl/shaders/mtl/shader_program.hpp>
 #include <mbgl/util/convert.hpp>
 
+#include <Metal/Metal.hpp>
+
+#include <optional>
+
 namespace mbgl {
 namespace mtl {
 
@@ -44,6 +48,31 @@ void LayerGroup::render(RenderOrchestrator&, PaintParameters& parameters) {
 #endif
 
     auto& renderPass = static_cast<RenderPass&>(*parameters.renderPass);
+    auto& context = static_cast<Context&>(parameters.context);
+    const auto& renderable = renderPass.getDescriptor().renderable;
+
+    // Isomaps : état de profondeur des drawables 3D (maillage terrain). Drawable::draw SAUTE tout le
+    // bloc depth-stencil pour is3D (« handled by the layer group ») et TileLayerGroup le gère — mais ce
+    // LayerGroup SIMPLE (celui du terrain) ne posait RIEN : les tuiles héritaient de l'état laissé par
+    // le rendu précédent → test de profondeur aléatoire → l'ORDRE d'arrivée décidait (mesuré : sommet
+    // correct, puis ÉCRASÉ par les tuiles du fond arrivées après). Convention reversed-Z du terrain
+    // (near→1, far→0, clear 0, cf. mtl/terrain.hpp) → GreaterEqual + écriture.
+    std::optional<MTLDepthStencilStatePtr> state3d, state3dNoDepth;
+    const auto& getState3D = [&](bool depth) -> const MTLDepthStencilStatePtr& {
+        if (depth) {
+            if (!state3d) {
+                const auto depthMode = gfx::DepthMode{.func = gfx::DepthFunctionType::GreaterEqual,
+                                                      .mask = gfx::DepthMaskType::ReadWrite};
+                state3d = context.makeDepthStencilState(depthMode, gfx::StencilMode::disabled(), renderable);
+            }
+            return *state3d;
+        }
+        if (!state3dNoDepth) {
+            state3dNoDepth = context.makeDepthStencilState(
+                gfx::DepthMode::disabled(), gfx::StencilMode::disabled(), renderable);
+        }
+        return *state3dNoDepth;
+    };
 
     bool bindUBOs = false;
     visitDrawables([&](gfx::Drawable& drawable) {
@@ -58,6 +87,13 @@ void LayerGroup::render(RenderOrchestrator&, PaintParameters& parameters) {
 
         for (const auto& tweaker : drawable.getTweakers()) {
             tweaker->execute(drawable, parameters);
+        }
+
+        // Restreint au groupe « terrain » (surface principale) : le jumeau « terrain-depth » rend dans sa
+        // propre cible (pack de profondeur en COULEUR, pas de remap reversed-Z, pas d'attache depth) —
+        // lui imposer cet état serait incorrect (et invalide côté Metal sans attache de profondeur).
+        if (drawable.getIs3D() && getName() == "terrain") {
+            renderPass.setDepthStencilState(getState3D(drawable.getEnableDepth()));
         }
 
         drawable.draw(parameters);

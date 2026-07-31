@@ -19,14 +19,30 @@ RenderPass::RenderPass(CommandEncoder& commandEncoder_, const char* name, const 
 
     if (const auto& buffer = resource.getCommandBuffer()) {
         if (auto rpd = resource.getRenderPassDescriptor()) {
-            if (descriptor.clearColor) {
-                if (auto copy = NS::TransferPtr(rpd->copy())) {
+            if (auto copy = NS::TransferPtr(rpd->copy())) {
+                bool modified = false;
+                if (descriptor.clearColor) {
                     if (auto* colorTarget = copy->colorAttachments()->object(0)) {
                         const auto& c = *descriptor.clearColor;
                         colorTarget->setLoadAction(MTL::LoadActionClear);
                         colorTarget->setClearColor(MTL::ClearColor::Make(c.r, c.g, c.b, c.a));
-                        rpd = std::move(copy);
+                        modified = true;
                     }
+                }
+                // Isomaps : descriptor.clearDepth était IGNORÉ (seul clearColor était appliqué) — le
+                // buffer de profondeur restait au clear PAR DÉFAUT de la vue (1.0), alors que le terrain
+                // reversed-Z (near→1, far→0, GreaterEqual) suppose un clear à 0 (renderer_impl). C'est ce
+                // qui rendait le test de profondeur du terrain inopérant (ordre d'arrivée décidait) puis,
+                // une fois l'état GreaterEqual réellement posé, TOUT culled (ciel seul, mesuré).
+                if (descriptor.clearDepth) {
+                    if (auto* depthTarget = copy->depthAttachment(); depthTarget && depthTarget->texture()) {
+                        depthTarget->setLoadAction(MTL::LoadActionClear);
+                        depthTarget->setClearDepth(static_cast<double>(*descriptor.clearDepth));
+                        modified = true;
+                    }
+                }
+                if (modified) {
+                    rpd = std::move(copy);
                 }
             }
             encoder = NS::RetainPtr(buffer->renderCommandEncoder(rpd.get()));
