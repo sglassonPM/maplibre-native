@@ -437,6 +437,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     ++demUpdateCounter;
     // 🧪 DIAG vanish (à retirer) — compteurs de la boucle de dessin de la frame précédente.
     static int s_drawn = 0, s_skipBM = 0, s_skipDEM = 0;
+    static std::vector<std::string> s_flats; // 🕳 tuiles à liaison DEM non propre (id→ancêtre/PLAT)
     for (const auto& renderTile : *renderTiles) {
         const auto& tile = renderTile.getTile();
         if (tile.kind != Tile::Kind::RasterDEM) {
@@ -534,6 +535,27 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             for (int zz = 23; zz >= 0; --zz) {
                 if (meshZ[zz] > 0) meshHisto += " z" + util::toString(zz) + ":" + util::toString(meshZ[zz]);
             }
+            // 🔗 QUALITÉ DES LIAISONS (diag B3) : tiers DEM des drawables (2 = DEM propre, 1 = ancêtre,
+            // 0 = placeholder plat) et écart de zoom du satellite lié (0 = exact, k = ancêtre k niveaux
+            // au-dessus → k crans de flou). Un paquet de tuiles en tier 1 / satAnc≥3 au REPOS = zone
+            // rabotée/délavée (sommets tronqués, rideau de skirt) par liaisons grossières, pas par le LOD.
+            int tier0 = 0, tier1 = 0, tier2 = 0;
+            std::array<int, 5> satAnc{}; // 0,1,2,3,≥4 niveaux au-dessus
+            for (const auto& [tid, tier] : tilesWithDrawables) {
+                (tier == 2 ? tier2 : (tier == 1 ? tier1 : tier0))++;
+                if (const auto mc = drawableMapCoords.find(tid); mc != drawableMapCoords.end()) {
+                    const int up = std::max(0, static_cast<int>(std::lround(-std::log2(mc->second[0]))));
+                    ++satAnc[std::min(up, 4)];
+                }
+            }
+            std::string liaisons = " 🔗 dem2/1/0=" + util::toString(tier2) + "/" + util::toString(tier1) +
+                                   "/" + util::toString(tier0) + " satAnc0/1/2/3+=" +
+                                   util::toString(satAnc[0]) + "/" + util::toString(satAnc[1]) + "/" +
+                                   util::toString(satAnc[2]) + "/" + util::toString(satAnc[3] + satAnc[4]);
+            if (!s_flats.empty()) {
+                liaisons += " 🕳";
+                for (const auto& f : s_flats) liaisons += f;
+            }
             Log::Warning(Event::Render,
                          "🧭 STATUS zoom=" + util::toString(state.getZoom()) +
                              " œilASL=" + util::toString(static_cast<int>(eyeASL)) +
@@ -543,11 +565,12 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                              " dessin(d/sB/sD)=" + util::toString(s_drawn) + "/" + util::toString(s_skipBM) +
                              "/" + util::toString(s_skipDEM) +
                              " satTex=" + util::toString(basemapTextures.size()) +
-                             " demTex=" + util::toString(demTextures.size()) + " |" + meshHisto);
+                             " demTex=" + util::toString(demTextures.size()) + liaisons + " |" + meshHisto);
         }
     }
     // Reset des compteurs de dessin (incrémentés dans la boucle ci-dessous, lus au prochain STATUS).
     s_drawn = s_skipBM = s_skipDEM = 0;
+    s_flats.clear();
 
     // Isomaps : le RETRAIT des drawables sortis du cover est déplacé APRÈS la boucle de création et
     // conditionné à la RE-COUVERTURE (cf. bloc en fin de fonction). Sous budget-temps, retirer d'abord
@@ -648,8 +671,17 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                                                                static_cast<uint32_t>(ny >> sh)));
                     const auto nb = meshTileDemZoom.find(cand);
                     if (nb != meshTileDemZoom.end()) {
-                        if (nb->second >= 0 && self->second > nb->second) {
-                            dz[e] = static_cast<float>(self->second - nb->second);
+                        // Isomaps : le raccord doit viser la GRILLE DE MAILLAGE de la voisine, pas ses
+                        // texels DEM. La voisine rend des segments LINÉAIRES entre SES sommets (pas
+                        // 8192·2^(z−zz)/MESH_SIZE en unités locales) ; s'aligner sur la grille de texels
+                        // (~4× plus fine) laissait notre bord suivre la courbure du DEM ENTRE ses sommets
+                        // → marche de dizaines/centaines de mètres sur les faces raides (« sommet coupé
+                        // à l'horizontale » mesuré ; la pyramide DEM, elle, est cohérente : p95 ≈ 7 m).
+                        // On passe désormais le PAS DE RACCORD en unités locales (0 = pas de raccord) :
+                        // échantillonner aux positions des sommets de la voisine (mêmes valeurs à ±7 m)
+                        // et interpoler linéairement entre = le MÊME segment que le sien.
+                        if (zz < z) {
+                            dz[e] = static_cast<float>(util::EXTENT / MESH_SIZE) * std::exp2(static_cast<float>(z - zz));
                         }
                         break;
                     }
@@ -779,6 +811,20 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             }
         }
 
+        // 🕳 DIAG plaques plates (B3) : identité des tuiles dont la liaison DEM n'est pas propre — id +
+        // ancêtre réellement lié (ou PLAT = placeholder). Lues dans le STATUS pour vérifier côté serveur.
+        if (demTier < 2 && s_flats.size() < 3) {
+            std::string what = (demTier == 1) ? "→anc" : "→PLAT";
+            s_flats.push_back(" z" + util::toString(static_cast<int>(unwrapped.canonical.z)) + "/" +
+                              util::toString(unwrapped.canonical.x) + "/" +
+                              util::toString(unwrapped.canonical.y) + what +
+                              (demTier == 1 ? util::toString(static_cast<int>(demCoords[0] > 0
+                                                                                  ? std::lround(-std::log2(
+                                                                                        demCoords[0] * util::EXTENT))
+                                                                                  : -1))
+                                            : ""));
+        }
+
         // Isomaps : texture raster basemap (échantillonnage direct) + transform UV. On la calcule ICI,
         // avant le check de réutilisation, pour pouvoir recréer le drawable quand une tuile raster PLUS
         // FINE devient dispo (map_coords[0] : 1.0 = exacte, <1 = ancêtre ; plus grand = plus fin).
@@ -882,13 +928,17 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             }
             const UnwrappedTileID tuw = tid.toUnwrapped();
             bool covered = false;
+            bool ancestorInCover = false; // un ancêtre est dans le cover (drawable prêt ou non)
             for (int zz = static_cast<int>(tuw.canonical.z) - 1; zz >= 0 && !covered; --zz) {
                 const CanonicalTileID anc = tuw.canonical.scaledTo(static_cast<uint8_t>(zz));
                 const OverscaledTileID ancId(anc.z, tuw.wrap, anc);
-                covered = currentTiles.contains(ancId) && tilesWithDrawables.contains(ancId);
+                if (currentTiles.contains(ancId)) {
+                    ancestorInCover = true;
+                    covered = tilesWithDrawables.contains(ancId);
+                }
             }
+            bool any = false;
             if (!covered) {
-                bool any = false;
                 bool all = true;
                 for (const auto& id : meshTiles) {
                     if (id.canonical.z > tuw.canonical.z && id.wrap == tuw.wrap &&
@@ -902,7 +952,14 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                 }
                 covered = any && all;
             }
-            if (covered) {
+            // ZOMBIES : une tuile SANS AUCUN LIEN avec le cover courant (ni ancêtre dans le cover, ni
+            // descendant) a sa zone HORS VUE — elle ne sera jamais « re-couverte », donc l'ancien critère
+            // la gardait POUR TOUJOURS, rendue avec des liaisons figées (jamais re-résolues puisque hors
+            // maillage). Au retour de la caméra : surface périmée en travers du relief actuel (mesuré :
+            // drawables=100 pour maillage=82 au repos ; bande sombre coupant une face, « mauvais ordre »).
+            // La retirer ne peut pas créer de trou visible : sa zone n'est pas dans le cover.
+            const bool unrelated = !ancestorInCover && !any;
+            if (covered || unrelated) {
                 removable.push_back(tid);
             }
         }
@@ -997,6 +1054,13 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID, float x, float 
         demTile = static_cast<RasterDEMTile*>(t);
         demC = c;
     }
+    // Isomaps : MÉMOIRE DU MEILLEUR ÉCHANTILLON (cf. header, anti-oscillation renorm/LOD). Cellule ~75 m.
+    const uint64_t holdCell = (static_cast<uint64_t>(static_cast<uint32_t>(gx * (1u << 19))) << 32) |
+                              static_cast<uint32_t>(gy * (1u << 19));
+    const auto held = elevationHold.find(holdCell);
+    if (held != elevationHold.end() && static_cast<int>(held->second.z) > bestZoom) {
+        return held->second.v; // un DEM plus fin a déjà répondu ici : sa valeur reste la meilleure
+    }
     if (!demTile) {
         return 0.0f;
     }
@@ -1021,7 +1085,13 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID, float x, float 
     const float br = static_cast<float>(demData.get(x0 + 1, y0 + 1));
     const float top = tl + (tr - tl) * fx;
     const float bottom = bl + (br - bl) * fx;
-    return top + (bottom - top) * fy;
+    const float value = top + (bottom - top) * fy;
+    // Mémorise le meilleur échantillon (à zoom égal, la dernière valeur = données à jour). Borne mémoire.
+    if (elevationHold.size() > 100000) {
+        elevationHold.clear();
+    }
+    elevationHold[holdCell] = {static_cast<int8_t>(bestZoom), value};
+    return value;
 }
 
 float RenderTerrain::getElevationWithExaggeration(const UnwrappedTileID& tileID, float x, float y) const {

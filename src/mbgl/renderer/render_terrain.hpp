@@ -319,6 +319,17 @@ private:
 
     // Plage d'altitude la plus large vue par tuile — union monotone, pour un cull stable
     std::map<CanonicalTileID, Range<double>> meshTileElevation;
+    // Isomaps : MÉMOIRE DU MEILLEUR ÉCHANTILLON d'altitude CPU par cellule (~75 m, grille z19). Le terrain
+    // est STATIQUE : la valeur issue du DEM le plus fin jamais vu pour un point reste la meilleure pour
+    // toujours. Sans elle, getElevation suit « le plus fin ACTUELLEMENT chargé » : quand la pyramide
+    // évince une tuile fine, l'échantillon au centre RE-SAUTE vers la valeur lissée d'un ancêtre (±1500 m
+    // mesurés sur arête) → la renormalisation AGL bouge le zoom → le LOD re-décide → la pyramide recharge
+    // → oscillation perpétuelle au REPOS (tuiles « violet↔vert », UPDATE ×8/s à caméra fixe, mesuré).
+    struct ElevationHoldEntry {
+        int8_t z;
+        float v;
+    };
+    mutable std::unordered_map<uint64_t, ElevationHoldEntry> elevationHold;
     // Isomaps : ids dont la plage d'élévation vient des données propres de la tuile (cache-first possible,
     // cf. StableElevationProvider — les plages d'ancêtre doivent continuer à se raffiner).
     std::set<CanonicalTileID> meshTileElevationFinal;

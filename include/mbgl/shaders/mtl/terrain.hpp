@@ -19,7 +19,8 @@ enum {
 struct alignas(16) TerrainDrawableUBO {
     /*  0 */ float4x4 matrix;
     /* 64 */ float4 dem_coords;
-    /* 80 */ float4 edge_dz; // deficit de resolution DEM de la voisine sur chaque arete (W,E,N,S)
+    /* 80 */ float4 edge_dz; // pas de raccord par arete (W,E,N,S) : pas de la grille de sommets de la
+                             // voisine plus grossiere, en unites locales 0..8192 (0 = pas de raccord)
     /* 96 */ float4 map_coords; // Isomaps : transform UV tuile raster ancetre {1/scale, dx/scale, dy/scale, 0}
     /* 112 */ float4 fog_params; // Isomaps BRUME : camera en repere local tuile (xy, unites 0..8192) + metres/unite (z)
     /* 128 */
@@ -74,6 +75,7 @@ struct FragmentStage {
     float skirt;     // Isomaps JUPE : profondeur du rideau en metres (0 sur la surface). Sert a ombrer LES
                      // SEULES jupes profondes (frontieres de LOD ~43 m) : un ombrage constant noircissait le
                      // liseré de ~11 m present le long de CHAQUE bord a pitch 0 → quadrillage sombre.
+    float tileZoom;  // Isomaps DIAG : zoom canonique de la tuile (map_coords.w, rempli par le tweaker)
 };
 
 FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
@@ -100,12 +102,14 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     float elevation = get_elevation(pos, demTexture, demSampler, drawable.dem_coords, props.unpack,
                                     drawable.dem_coords.w, props.exaggeration, 1.0);
 
-    // Raccord des aretes : sur un bord dont la voisine est plus grossiere de edge_dz niveaux
-    // de resolution DEM, on remplace l'altitude par l'interpolation lineaire entre les deux
-    // points de la grille GROSSIERE qui encadrent le sommet. L'arete devient le meme segment
-    // que celui de la voisine -> plus de marche, plus de trou. pos.w porte les drapeaux d'arete.
+    // Raccord des aretes : sur un bord dont la voisine (maillage) est plus grossiere, edge_dz porte le
+    // PAS DE SA GRILLE DE SOMMETS en unites locales (0 = pas de raccord). On remplace l'altitude par
+    // l'interpolation lineaire entre les deux SOMMETS DE LA VOISINE qui encadrent le notre : l'arete
+    // devient le MEME segment que le sien (la pyramide DEM est coherente a ~7 m pres) -> plus de marche.
+    // (Avant : alignement sur la grille de TEXELS DEM, ~4x plus fine que la grille de sommets de la
+    // voisine -> notre bord suivait la courbure du DEM entre ses sommets -> marches enormes en paroi.)
+    // pos.w porte les drapeaux d'arete.
     const int edgeFlags = int(vertx.pos.w);
-    const float texStep = 8192.0 / drawable.dem_coords.w; // un texel DEM en unites de pos
     float dzY = 0.0; // aretes ouest/est : la position varie en y
     if ((edgeFlags & 1) != 0) { dzY = max(dzY, drawable.edge_dz.x); }
     if ((edgeFlags & 2) != 0) { dzY = max(dzY, drawable.edge_dz.y); }
@@ -113,7 +117,7 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     if ((edgeFlags & 4) != 0) { dzX = max(dzX, drawable.edge_dz.z); }
     if ((edgeFlags & 8) != 0) { dzX = max(dzX, drawable.edge_dz.w); }
     if (dzY > 0.0) {
-        const float s = texStep * exp2(dzY);
+        const float s = dzY;
         const float y0 = floor(pos.y / s) * s;
         const float y1 = min(y0 + s, 8192.0);
         const float e0 = get_elevation(float2(pos.x, y0), demTexture, demSampler, drawable.dem_coords,
@@ -123,7 +127,7 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         elevation = mix(e0, e1, (s > 0.0) ? (pos.y - y0) / s : 0.0);
     }
     if (dzX > 0.0) {
-        const float s = texStep * exp2(dzX);
+        const float s = dzX;
         const float x0 = floor(pos.x / s) * s;
         const float x1 = min(x0 + s, 8192.0);
         const float e0 = get_elevation(float2(x0, pos.y), demTexture, demSampler, drawable.dem_coords,
@@ -169,6 +173,7 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         .tileUV    = pos / 8192.0,
         .fogStart  = drawable.fog_params.w,
         .skirt     = ele_delta, // profondeur de jupe (m), 0 hors jupe
+        .tileZoom  = drawable.map_coords.w,
     };
 }
 
@@ -198,19 +203,19 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     rgb *= half(1.0 - 0.35 * smoothstep(15.0, 40.0, in.skirt));
 
     // Isomaps DIAG — visualisation du LOD : teinte par niveau de zoom de la tuile + contour.
-    // Légende : z≤8 bleu · z9-10 cyan · z11 vert · z12 jaune · z13 orange · z14 rouge.
-    // DÉSACTIVÉE (#if 0) — repasser à #if 1 pour la réafficher en cas de besoin de debug LOD.
-#if 0
+    // Légende : z≤11 bleu · z12 cyan · z13 vert · z14 jaune · z15 orange · z16 rouge · z≥17 magenta.
+    // Zoom lu dans in.tileZoom (map_coords.w, rempli par le tweaker). Repasser à #if 0 après debug.
+#if 1
     {
-        const float z = in.fogStart; // NB : le slot fog_params.w porte desormais fogStart, plus le zoom
+        const float z = in.tileZoom;
         half3 zc;
-        if (z <= 8.5)       zc = half3(0.15, 0.30, 0.95);
-        else if (z <= 9.5)  zc = half3(0.10, 0.65, 0.95);
-        else if (z <= 10.5) zc = half3(0.10, 0.85, 0.85);
-        else if (z <= 11.5) zc = half3(0.20, 0.90, 0.30);
-        else if (z <= 12.5) zc = half3(0.95, 0.90, 0.15);
-        else if (z <= 13.5) zc = half3(1.00, 0.55, 0.10);
-        else                zc = half3(1.00, 0.15, 0.15);
+        if (z <= 11.5)      zc = half3(0.15, 0.30, 0.95);
+        else if (z <= 12.5) zc = half3(0.10, 0.85, 0.85);
+        else if (z <= 13.5) zc = half3(0.20, 0.90, 0.30);
+        else if (z <= 14.5) zc = half3(0.95, 0.90, 0.15);
+        else if (z <= 15.5) zc = half3(1.00, 0.55, 0.10);
+        else if (z <= 16.5) zc = half3(1.00, 0.15, 0.15);
+        else                zc = half3(0.90, 0.20, 0.90);
         rgb = mix(rgb, zc, half(0.40));
         // Contour de tuile (uv local proche d'un bord) — liseré sombre.
         const float2 dedge = min(in.tileUV, 1.0 - in.tileUV);

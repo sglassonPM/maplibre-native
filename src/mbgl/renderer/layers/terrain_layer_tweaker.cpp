@@ -122,7 +122,12 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
             .matrix = util::cast<float>(matrix),
             .dem_coords = terrain->getDrawableDemCoords(*drawable.getTileID()),
             .edge_dz = terrain->getDrawableEdgeDz(*drawable.getTileID()),
-            .map_coords = terrain->getDrawableMapCoords(*drawable.getTileID()),
+            .map_coords =
+                [&] {
+                    auto mc = terrain->getDrawableMapCoords(*drawable.getTileID());
+                    mc[3] = static_cast<float>(tileID.canonical.z); // DIAG LOD : zoom tuile (slot libre)
+                    return mc;
+                }(),
             .fog_params = {fogCamX, fogCamY, fogMPerUnit, fogStartM}
         };
 

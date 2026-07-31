@@ -9,8 +9,9 @@ struct alignas(16) TerrainDrawableUBO {
     /*  0 */ std::array<float, 4 * 4> matrix;
     /* 64 */ std::array<float, 4> dem_coords; // scale, x offset, y offset into the bound DEM
                                               // tile ({1,0,0,0} unless an ancestor is bound)
-    /* 80 */ std::array<float, 4> edge_dz;    // deficit de resolution DEM de la voisine sur
-                                              // chaque arete (W, E, N, S) ; 0 = meme ou plus fine
+    /* 80 */ std::array<float, 4> edge_dz;    // pas de raccord par arete (W, E, N, S) : pas de la grille
+                                              // de sommets de la voisine plus grossiere, en unites
+                                              // locales 0..8192 ; 0 = voisine de meme grille ou plus fine
     /* 96 */ std::array<float, 4> map_coords; // Isomaps : transform UV pour la tuile raster basemap
                                               // ({1/scale, dx/scale, dy/scale, 0}) quand une tuile
                                               // ANCETRE est bindee (fallback chargement) ; {1,0,0,0}
