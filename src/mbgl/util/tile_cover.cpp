@@ -7,6 +7,7 @@
 #include <mbgl/util/tile_cover.hpp>
 #include <mbgl/util/tile_cover_impl.hpp>
 
+#include <cmath>
 #include <functional>
 #include <list>
 
@@ -259,6 +260,15 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
     // Isomaps : référence sol stable (terrain sous la caméra) en unités-tuile — sert au LOD AGL ci-dessous.
     const double cameraGroundZ = cameraGroundM * metersToTileUnits;
 
+    // Isomaps 🌍 : PLAFOND D'HORIZON (terrain seulement). Le plan Mercator est infini : à fort pitch le
+    // frustum admet ~2 000 km de terrain (34 tuiles z7 mesurées) qui, sur une Terre courbe, sont SOUS
+    // l'horizon — invisibles en vrai, mais chaque tuile coûte sa texture satellite (~4 Mo) → 3,4 Go →
+    // jetsam (crash mesuré). Portée optique réelle : d ≈ 3,57·(√h_œil + √h_cible) km ; cible plafonnée à
+    // 5 000 m (sommets alpins). Tout nœud entièrement au-delà est coupé (sous-arbre compris). Le plafond
+    // croît avec l'altitude de l'œil → au dézoom il cesse naturellement d'agir.
+    const double eyeASLMeters = std::max(0.0, cameraCoord[2] / metersToTileUnits);
+    const double horizonCapTiles = 3570.0 * (std::sqrt(eyeASLMeters) + 71.0) * metersToTileUnits;
+
     // The tile's bounds including its terrain: the flat footprint given the height of
     // the DEM covering it. Relief rising towards the camera takes up screen space that
     // the flat footprint does not, so a tile can be in view when its footprint is not;
@@ -371,17 +381,36 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
                 // fait DÉJÀ le repli sur l'ancêtre le plus fin parmi TOUTES les tuiles chargées (rendues +
                 // aperçu retenu, cf. DEMElevationProvider) et le Stable garde la dernière plage connue →
                 // stable (pas de retour au plat) et local. Ultime repli : terrain sous la caméra.
-                double zc = cameraGroundZ;
+                // Boîte PLEINE [min,max] (pas l'altitude moyenne) : pour une tuile-FALAISE de 2 km de haut,
+                // la moyenne mettait la « distance » à mi-paroi (des km) alors que le haut de la face frôle
+                // la caméra → premier plan resté grossier pendant que l'arrière-plan (vallée, plus proche du
+                // plan moyen de SES tuiles) était net. distanceXYZ vise le point de la boîte le plus proche
+                // = la face la plus proche de la paroi. Stable provider → plages monotones, pas d'oscillation.
                 if (const auto r = state.elevationProvider->getTileElevationRange(
                         CanonicalTileID(node.zoom, node.x, node.y))) {
-                    zc = 0.5 * (r->min + r->max) * metersToTileUnits;
+                    lodBox.min[2] = r->min * metersToTileUnits;
+                    lodBox.max[2] = r->max * metersToTileUnits;
+                } else {
+                    lodBox.min[2] = cameraGroundZ;
+                    lodBox.max[2] = cameraGroundZ;
                 }
-                lodBox.min[2] = zc;
-                lodBox.max[2] = zc;
             }
-            const vec3 camToTileMercator = vec3Scale(lodBox.distanceXYZ(cameraCoord), 1.0 / worldSize);
+            const vec3 camToTileTiles = lodBox.distanceXYZ(cameraCoord);
+            // Isomaps 🌍 : cull d'horizon (cf. horizonCapTiles) — distance HORIZONTALE au point le plus
+            // proche de la boîte ; un nœud entièrement au-delà de la portée optique est abandonné avec
+            // tout son sous-arbre. Terrain seulement (2D inchangé).
+            if (state.elevationProvider && std::hypot(camToTileTiles[0], camToTileTiles[1]) > horizonCapTiles) {
+                continue;
+            }
+            const vec3 camToTileMercator = vec3Scale(camToTileTiles, 1.0 / worldSize);
             const double distanceToTileMercator = vec3Length(camToTileMercator);
-            const double cosPitchToTile = std::max(0.0, camToTileMercator[2] / distanceToTileMercator);
+            double cosPitchToTile = std::max(0.0, camToTileMercator[2] / distanceToTileMercator);
+            if (state.elevationProvider) {
+                // Plancher d'obliquité en 3D : cos(pitchToTile)→0 suppose une tuile PLATE vue en rasant —
+                // faux pour une PAROI vue de face (regard horizontal = incidence perpendiculaire au mur).
+                // Sans plancher, les faces proches n'étaient jamais subdivisées (écran rempli de flou).
+                cosPitchToTile = std::max(cosPitchToTile, 0.35);
+            }
             const double pitchExponent =
                 0.5; // 0: constant screen width, 1/2: constant screen area, 1: constant screen height
             double tileScale = std::pow(2.0, node.zoom);
