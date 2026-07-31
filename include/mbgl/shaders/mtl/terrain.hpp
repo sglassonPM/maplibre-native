@@ -192,6 +192,9 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     const float fogStart = in.fogStart;         // m : debut de brume, altitude-aware (max 8 km, alt x2)
     const float fogEnd = fogStart + 47000.0;    // m : brume ~pleine (largeur de transition ~47 km)
     constexpr float fogMax = 0.85;              // opacite max (garde les silhouettes au-dela)
+    // NB : la brume est une SOUPAPE MEMOIRE assumée (façon Mapbox, qui voile bien plus tôt que nous) —
+    // le LOD du cover est ALIGNÉ dessus (tile_cover : plafonds de zoom par distance) : pas de détail
+    // coûteux là où le voile domine. Élargir la brume ⇒ revoir ces plafonds ensemble.
     const half3 fogColor = half3(0.72, 0.78, 0.84); // bleu-gris desature atmospherique
     float f = clamp((in.fogDist - fogStart) / (fogEnd - fogStart), 0.0, 1.0);
     f = f * f * fogMax;

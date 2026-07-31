@@ -106,10 +106,13 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
     std::optional<uint8_t> maxParentTileOverscaleFactor = sourceImpl.getMaxOverscaleFactorForParentTiles();
     // Isomaps : borne PAR DÉFAUT la remontée aux parents pour le Raster lourd (512@2x = 4,2 Mo/tuile).
     // Sans borne, chaque tuile idéale fraîche CRÉE et CHARGE tous ses ancêtres jusqu'à z0 (cascade
-    // mesurée : +1 Go et satTex 47→193 au premier mouvement). 4 niveaux suffisent : au-delà, le filet
-    // z2/z7/z10 retenu en permanence assure le fallback de drapage sans nouvelles requêtes.
+    // mesurée : +1 Go et satTex 47→193 au premier mouvement). 2 niveaux (était 4) : sur une vue à fort
+    // pitch étalée sur 10 niveaux de zoom (Nyon→Alpes), 4 niveaux de parents par idéale en chargement
+    // faisaient encore culminer satTex à 331 (1,32 Go mesuré, footprint 3,3 Go → zone jetsam). Entre le
+    // fallback z-2 (flou ×4 transitoire) et le filet z2/z7/z10 retenu en permanence, le drapage garde
+    // toujours quelque chose à montrer.
     if (!maxParentTileOverscaleFactor && type == SourceType::Raster) {
-        maxParentTileOverscaleFactor = 4;
+        maxParentTileOverscaleFactor = 2;
     }
     const Duration minimumUpdateInterval = sourceImpl.getMinimumTileUpdateInterval();
     const bool isVolatile = sourceImpl.isVolatile();
@@ -138,8 +141,16 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
             type != style::SourceType::Annotations) {
             // Request lower zoom level tiles (if configured to do so) in an attempt
             // to show something on the screen faster at the cost of a little of bandwidth.
-            const uint8_t prefetchZoomDelta = sourcePrefetchZoomDelta ? *sourcePrefetchZoomDelta
-                                                                      : parameters.prefetchZoomDelta;
+            uint8_t prefetchZoomDelta = sourcePrefetchZoomDelta ? *sourcePrefetchZoomDelta
+                                                                : parameters.prefetchZoomDelta;
+            // Isomaps : PAS de prefetch z−4 pour le Raster lourd (4,2 Mo/tuile GPU). Le cover Distance à
+            // panZoom retient en PERMANENCE un tapis d'ancêtres sur toute la scène (vue étalée sur 9
+            // niveaux : des dizaines de tuiles → partie du plateau satTex 316 / 1,26 Go mesuré, zone
+            // jetsam). Chez nous le repli visuel est déjà assuré par la remontée parentale (2 niveaux)
+            // et le filet permanent z2/z7/z10.
+            if (type == SourceType::Raster && !sourcePrefetchZoomDelta) {
+                prefetchZoomDelta = 0;
+            }
             if (prefetchZoomDelta) {
                 panZoom = std::max<int32_t>(tileZoom - prefetchZoomDelta, zoomRange.min);
             }

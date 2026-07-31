@@ -424,6 +424,20 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
             if (state.elevationProvider) {
                 const double tileDistMaxZoom = -std::log2(std::max(1e-9, distanceToTileMercator)) - 4.4;
                 if (static_cast<double>(node.zoom) + 1.0 > tileDistMaxZoom) shouldSplitTile = false;
+                // PLAFONDS ALIGNÉS SUR LA BRUME (soupape mémoire assumée, façon Mapbox) : au-delà de
+                // ~20/40/80 km le rendu est voilé à ~15/50/85 % (fogStart 8 km + 47 km, cf. shader
+                // terrain) — inutile d'y payer des tuiles satellite de 4 Mo. Chaque palier borne le zoom
+                // du maillage (et donc du satellite drapé, une texture par tuile de maillage).
+                const double distMeters = vec3Length(camToTileTiles) / metersToTileUnits;
+                double fogZoomCap = 30.0;
+                if (distMeters > 80000.0) {
+                    fogZoomCap = 9.0;
+                } else if (distMeters > 40000.0) {
+                    fogZoomCap = 11.0;
+                } else if (distMeters > 20000.0) {
+                    fogZoomCap = 13.0;
+                }
+                if (static_cast<double>(node.zoom) + 1.0 > fogZoomCap) shouldSplitTile = false;
             }
         } else {
             const vec3 distanceXyz = node.aabb.distanceXYZ(centerCoord);

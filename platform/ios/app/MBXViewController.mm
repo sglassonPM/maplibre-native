@@ -542,6 +542,17 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
 - (void)viewDidLoad {
   [super viewDidLoad];
 
+  // Isomaps : cache DISQUE (ambient) 512 Mo — le défaut iOS (50 Mo) ne tient que ~150 tuiles satellite
+  // (~300 Ko pièce) : un aller-retour de pan re-TÉLÉCHARGEAIT tout. Le cache MÉMOIRE raster reste borné
+  // à 32 tuiles (tile_pyramid, garde-fou jetsam) : le retour passe par un re-decode disque (~10 ms/tuile).
+  [[MLNOfflineStorage sharedOfflineStorage]
+      setMaximumAmbientCacheSize:512 * 1024 * 1024
+           withCompletionHandler:^(NSError *_Nullable error) {
+             if (error) {
+               NSLog(@"Isomaps cache ambiant : %@", error);
+             }
+           }];
+
   [self addPluginLayers];
 
   // Keep track of current map state and debug preferences,
