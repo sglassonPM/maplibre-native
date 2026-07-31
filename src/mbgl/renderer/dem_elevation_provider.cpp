@@ -93,7 +93,8 @@ std::optional<Range<double>> StableElevationProvider::getTileElevationRange(cons
     // même restreint aux plages « définitives », il a coïncidé avec un gel du raffinement (cover convergé
     // à ~6 tuiles → quiescence sur scène incomplète). Retour au comportement éprouvé : inner à chaque
     // requête, union monotone, cache en secours. La perf sera re-tentée isolément, mesurée.
-    const auto fresh = inner.getTileElevationRange(id);
+    uint8_t sourceZ = 0;
+    const auto fresh = inner.getTileElevationRange(id, &sourceZ);
     const auto it = cache.find(id);
     if (!fresh) {
         // DEM pas (encore) charge : garder la derniere plage connue plutot que « inconnu »,
@@ -101,9 +102,26 @@ std::optional<Range<double>> StableElevationProvider::getTileElevationRange(cons
         return it != cache.end() ? std::optional<Range<double>>(it->second) : std::nullopt;
     }
     Range<double> merged = *fresh;
-    if (it != cache.end()) {
-        merged.min = std::min(merged.min, it->second.min);
-        merged.max = std::max(merged.max, it->second.max);
+    if (sourceZ + 1 >= id.z) {
+        // Donnees PROPRES (ou parent immediat, deja serre sur un quart de tuile — couvre aussi les
+        // tuiles au-dela du zoom max du DEM) : plage quasi exacte -> REMPLACE (pas d'union).
+        // L'union monotone gardait a vie les maxima laches herites des ANCETRES (un z8 contenant le
+        // Mont Blanc legue max~4800 m a toutes ses vallees) -> le LOD distance jugeait ces tuiles
+        // « proches » pour toujours -> sur-division en BANDES z16 calquees sur l'empreinte des ancetres
+        // (mesure a pitch 0 : bandes rouges a bords rectilignes pleine largeur). Se resserrer vers la
+        // verite est stable par nature ; l'union ne protege que les plages d'ancetres (chargement).
+        if (sourceZ == id.z) {
+            finalized.insert(id);
+        }
+    } else if (it != cache.end()) {
+        if (finalized.contains(id)) {
+            // Deja figee sur donnees propres ; une reponse d'ancetre (DEM propre evince/recharge) ne
+            // doit PAS regonfler la plage exacte connue.
+            merged = it->second;
+        } else {
+            merged.min = std::min(merged.min, it->second.min);
+            merged.max = std::max(merged.max, it->second.max);
+        }
     }
     cache.insert_or_assign(id, merged); // on CACHE la valeur nue (sinon la marge s'accumulerait)
 
