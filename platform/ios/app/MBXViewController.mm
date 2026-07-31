@@ -3326,7 +3326,7 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
         [self.view addSubview:lbl];
         [NSLayoutConstraint activateConstraints:@[
             [lbl.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-            [lbl.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:50],
+            [lbl.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-8],
             [lbl.widthAnchor constraintEqualToConstant:300],
             [lbl.heightAnchor constraintEqualToConstant:34],
         ]];
