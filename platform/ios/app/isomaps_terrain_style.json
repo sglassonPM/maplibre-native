@@ -120,7 +120,7 @@
   ],
   "terrain": {
     "source": "terrainSource",
-    "exaggeration": 1.2,
+    "exaggeration": 1.1,
     "basemap": "satellite"
   }
 }
