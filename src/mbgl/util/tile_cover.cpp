@@ -6,9 +6,6 @@
 #include <mbgl/util/tile_coordinate.hpp>
 #include <mbgl/util/tile_cover.hpp>
 #include <mbgl/util/tile_cover_impl.hpp>
-#include <mbgl/util/logging.hpp>         // Isomaps : trace DFS 🔎 (à retirer avec elle)
-#include <mbgl/util/monotonic_timer.hpp> // Isomaps : throttle de la trace
-#include <mbgl/util/string.hpp>          // Isomaps : util::toString pour la trace
 
 #include <functional>
 #include <list>
@@ -201,6 +198,14 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
         transform.getPitch() > state.tileLodPitchThreshold || state.elevationProvider != nullptr;
     const uint8_t minZoom = allowVariableZoom ? zoomRange.min : z;
     uint8_t maxZoom = ((state.tileLodMode == TileLodMode::Distance) && allowVariableZoom) ? zoomRange.max : z;
+    // Isomaps : PLAFOND DE DRAPAGE. Le LOD AGL par-tuile peut pousser des sommets proches de l'œil bien
+    // au-delà du zoom nominal (au dézoom : z17 demandé à idealZoom 13 → ~200 tuiles satellite, 2,5 Go),
+    // alors que le maillage terrain — borné par son baseZoom (≈ z+2) — ne drape qu'UNE texture par tuile de
+    // maillage : plus fin est inutilisable. Borne : jamais plus fin que z+2 (= ceil(zoom)+1 ; préserve le
+    // z18 net validé à zoom 17). Masqué jusqu'ici par le frustum écrasé en Z qui culled ces tuiles à tort.
+    if (state.elevationProvider && maxZoom > z + 2) {
+        maxZoom = static_cast<uint8_t>(z + 2);
+    }
     // Isomaps : RÉFÉRENCE SOL STABLE pour le LOD terrain = altitude du terrain SOUS LA CAMÉRA (une seule
     // valeur). Elle sert à mesurer les distances tuile→caméra en AGL (hauteur au-dessus du SOL, cf. bloc LOD
     // plus bas) au lieu d'ASL (au-dessus de la mer). Ainsi le zoom suit la hauteur au-dessus du sol → net à
@@ -251,44 +256,6 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
     const Frustum frustum =
         Frustum::fromInvProjMatrix(transform.getInvProjectionMatrix(), worldSize, z, flippedY, pixelsPerMeter);
 
-    // 🔎 TRACE DFS (à retirer) — suit la chaîne de nœuds contenant le point écran (75 % largeur, 50 % hauteur
-    // = le milieu de la « zone bleue » au pan-droite) et logge chaque décision. Throttle 2 s, 3D uniquement.
-    bool traceOn = false;
-    double traceMx = -1.0, traceMy = -1.0; // cible en mercator [0..1]
-    std::string traceTag;
-    // Fenêtre de 100 ms toutes les 2 s : TOUS les covers de la fenêtre tracent (maillage + DEM + satellite
-    // côte à côte), tag par ligne pour les distinguer. Source vectorielle (max 14) exclue.
-    if (state.elevationProvider && zoomRange.max >= 15) {
-        static double s_traceWindowStart = -10.0;
-        const double nowTrace = util::MonotonicTimer::now().count();
-        if (nowTrace - s_traceWindowStart > 2.0) {
-            s_traceWindowStart = nowTrace;
-        }
-        if (nowTrace - s_traceWindowStart < 0.1) {
-            traceOn = true;
-            traceTag = "[" + util::toString(static_cast<int>(z)) + "/" +
-                       util::toString(static_cast<int>(zoomRange.min)) + "-" +
-                       util::toString(static_cast<int>(zoomRange.max)) + "]";
-            const auto sz = transform.getSize();
-            const auto tgt =
-                TileCoordinate::fromScreenCoordinate(transform, 0, {sz.width * 0.75, sz.height * 0.5}).p;
-            traceMx = tgt.x;
-            traceMy = tgt.y;
-            Log::Warning(Event::Render,
-                         "🔎 TRACE " + traceTag + " minZ=" + util::toString(minZoom) + " maxZ=" +
-                             util::toString(maxZoom) + " cible=" + util::toString(traceMx) + "," +
-                             util::toString(traceMy) + " camC=" + util::toString(cameraToCenterDistanceMercator));
-        }
-    }
-    const auto traceHit = [&](const Node& n) -> bool {
-        if (!traceOn || n.wrap != 0) {
-            return false;
-        }
-        const double s = std::exp2(static_cast<double>(n.zoom));
-        const double px = traceMx * s;
-        const double py = traceMy * s;
-        return px >= n.x && px < n.x + 1.0 && py >= n.y && py < n.y + 1.0;
-    };
     // Isomaps : référence sol stable (terrain sous la caméra) en unités-tuile — sert au LOD AGL ci-dessous.
     const double cameraGroundZ = cameraGroundM * metersToTileUnits;
 
@@ -384,13 +351,6 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
                                                              : frustum.intersects(testAABB);
 
             if (intersection == IntersectionResult::Separate) {
-                if (traceHit(node)) {
-                    Log::Warning(Event::Render,
-                                 "🔎 " + traceTag + " z" + util::toString(static_cast<int>(node.zoom)) + " " +
-                                     util::toString(node.x) + "/" + util::toString(node.y) +
-                                     " FRUSTUM-CULL elev=" + (elevated ? "oui" : "PLAT") + " boxZ=[" +
-                                     util::toString(testAABB.min[2]) + "," + util::toString(testAABB.max[2]) + "]");
-                }
                 continue;
             }
 
@@ -412,21 +372,12 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
                 // aperçu retenu, cf. DEMElevationProvider) et le Stable garde la dernière plage connue →
                 // stable (pas de retour au plat) et local. Ultime repli : terrain sous la caméra.
                 double zc = cameraGroundZ;
-                double trMin = -1.0, trMax = -1.0; // pour la trace 🔎
                 if (const auto r = state.elevationProvider->getTileElevationRange(
                         CanonicalTileID(node.zoom, node.x, node.y))) {
                     zc = 0.5 * (r->min + r->max) * metersToTileUnits;
-                    trMin = r->min;
-                    trMax = r->max;
                 }
                 lodBox.min[2] = zc;
                 lodBox.max[2] = zc;
-                if (traceHit(node)) {
-                    Log::Warning(Event::Render,
-                                 "🔎 " + traceTag + " z" + util::toString(static_cast<int>(node.zoom)) + " " +
-                                     util::toString(node.x) + "/" + util::toString(node.y) + " ELEV=[" +
-                                     util::toString(trMin) + "," + util::toString(trMax) + "] m");
-                }
             }
             const vec3 camToTileMercator = vec3Scale(lodBox.distanceXYZ(cameraCoord), 1.0 / worldSize);
             const double distanceToTileMercator = vec3Length(camToTileMercator);
@@ -444,15 +395,6 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
             if (state.elevationProvider) {
                 const double tileDistMaxZoom = -std::log2(std::max(1e-9, distanceToTileMercator)) - 4.4;
                 if (static_cast<double>(node.zoom) + 1.0 > tileDistMaxZoom) shouldSplitTile = false;
-                if (traceHit(node)) {
-                    Log::Warning(Event::Render,
-                                 "🔎 " + traceTag + " z" + util::toString(static_cast<int>(node.zoom)) + " " +
-                                     util::toString(node.x) + "/" + util::toString(node.y) +
-                                     " LOD dist=" + util::toString(distanceToTileMercator) +
-                                     " zc=" + util::toString(lodBox.min[2]) +
-                                     " cap=" + util::toString(tileDistMaxZoom) +
-                                     " split=" + (shouldSplitTile ? "1" : "0"));
-                }
             }
         } else {
             const vec3 distanceXyz = node.aabb.distanceXYZ(centerCoord);
@@ -484,14 +426,6 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
                                  (preciseElevated
                                       ? frustum.intersectsElevated(preciseAABB) != IntersectionResult::Separate
                                       : frustum.intersectsPrecise(preciseAABB, true) != IntersectionResult::Separate);
-            if (traceHit(node)) {
-                Log::Warning(Event::Render,
-                             "🔎 " + traceTag + " z" + util::toString(static_cast<int>(node.zoom)) + " " + util::toString(node.x) +
-                                 "/" + util::toString(node.y) + (visible ? " EMIT" : " CULL-precis") +
-                                 std::string(" split=") + (shouldSplitTile ? "1" : "0") + " fullyVis=" +
-                                 (node.fullyVisible ? "1" : "0") + " boxZ=[" + util::toString(preciseAABB.min[2]) +
-                                 "," + util::toString(preciseAABB.max[2]) + "]");
-            }
             if (visible) {
                 const OverscaledTileID id = {
                     node.zoom == maxZoom ? overscaledZoom : node.zoom, node.wrap, node.zoom, node.x, node.y};

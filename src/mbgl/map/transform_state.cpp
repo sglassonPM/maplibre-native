@@ -780,13 +780,20 @@ TileCoordinate TransformState::screenCoordinateToTileCoordinate(const ScreenCoor
         return {.p = {}, .z = 0};
     }
 
-    float targetZ = 0;
+    // Isomaps : le plan d'intersection est le plan DU CENTRE (z = centerAltitude, en mètres — l'espace
+    // monde de coordMatrix est (x,y pixels, z mètres)), plus le niveau de la mer. Depuis la caméra AGL,
+    // le centre vit à l'altitude du terrain ; dé-projeter sur z=0 visait un point 2-3× plus loin le long
+    // du rayon (voire dégénéré au-dessus de l'horizon marin) → moveBy/easeTo tiraient le centre vers
+    // l'AVANT quel que soit le sens du drag (pan vertical « à sens unique », sauts kilométriques).
+    // Sur le plan du centre, l'invariant amont est restauré : centre écran ↔ centre carte, drag symétrique.
+    // Carte plate : centerAltitude = 0 → comportement inchangé.
+    const double targetZ = getCenterAltitude();
 
     double flippedY = size.height - point.y;
 
     // since we don't know the correct projected z value for the point,
     // unproject two points to get a line and then find the point on that
-    // line with z=0
+    // line with z=targetZ
 
     vec4 coord0;
     vec4 coord1;
