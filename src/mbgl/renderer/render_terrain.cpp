@@ -532,8 +532,23 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             for (int zz = 23; zz >= 0; --zz) {
                 if (meshZ[zz] > 0) meshHisto += " z" + util::toString(zz) + ":" + util::toString(meshZ[zz]);
             }
+            // 🔗 QUALITÉ DES LIAISONS (permanent, réintroduit — il a tranché seul plusieurs bugs) :
+            // tiers DEM des drawables (2 propre / 1 ancêtre / 0 plat) et écart de zoom du satellite lié.
+            int tier0 = 0, tier1 = 0, tier2 = 0;
+            std::array<int, 5> satAnc{};
+            for (const auto& [tid, tier] : tilesWithDrawables) {
+                (tier == 2 ? tier2 : (tier == 1 ? tier1 : tier0))++;
+                if (const auto mc = drawableMapCoords.find(tid); mc != drawableMapCoords.end()) {
+                    const int up = std::max(0, static_cast<int>(std::lround(-std::log2(mc->second[0]))));
+                    ++satAnc[std::min(up, 4)];
+                }
+            }
+            const std::string liaisons = " 🔗 dem2/1/0=" + util::toString(tier2) + "/" + util::toString(tier1) +
+                                         "/" + util::toString(tier0) + " satAnc0/1/2/3+=" +
+                                         util::toString(satAnc[0]) + "/" + util::toString(satAnc[1]) + "/" +
+                                         util::toString(satAnc[2]) + "/" + util::toString(satAnc[3] + satAnc[4]);
             Log::Warning(Event::Render,
-                         "🧭 STATUS zoom=" + util::toString(state.getZoom()) +
+                         "🧭 STATUS zoom=" + util::toString(state.getZoom()) + liaisons +
                              " œilASL=" + util::toString(static_cast<int>(eyeASL)) +
                              " centreAlt=" + util::toString(static_cast<int>(state.getCenterAltitude())) +
                              " maillage=" + util::toString(meshTiles.size()) +
@@ -692,6 +707,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     for (size_t tileIdx = 0; tileIdx < orderedMeshTiles.size(); ++tileIdx) {
         const auto& unwrapped = orderedMeshTiles[tileIdx];
         const OverscaledTileID tileID(unwrapped.canonical.z, unwrapped.wrap, unwrapped.canonical);
+
 
         // Fast-skip O(1) : drawable dont les liaisons sont À JOUR (rien de neuf depuis sa résolution), ou
         // déjà au MAXIMUM (DEM propre + satellite exact — rien à améliorer). L'ancien critère « tier 2 »
@@ -992,7 +1008,18 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID, float x, float 
     // Isomaps : MÉMOIRE DU MEILLEUR ÉCHANTILLON (cf. header, anti-oscillation renorm/LOD). Cellule ~75 m.
     const uint64_t holdCell = (static_cast<uint64_t>(static_cast<uint32_t>(gx * (1u << 19))) << 32) |
                               static_cast<uint32_t>(gy * (1u << 19));
-    const auto held = elevationHold.find(holdCell);
+    // Garde de plausibilité : un décodage DEM aberrant (pixel corrompu, nodata terrain-RGB) peut sortir
+    // des milliers de mètres fantômes (mesuré : échantillon ~12 700 m → anti-collision → œil expédié à
+    // 13 000 m). Hors de [-12000, 9500] m (Everest + marge), l'échantillon est du bruit : jamais stocké,
+    // jamais servi.
+    constexpr float kMinPlausibleM = -12000.0f;
+    constexpr float kMaxPlausibleM = 9500.0f;
+    auto held = elevationHold.find(holdCell);
+    if (held != elevationHold.end() &&
+        !(held->second.v >= kMinPlausibleM && held->second.v <= kMaxPlausibleM)) {
+        elevationHold.erase(held); // purge une entrée empoisonnée avant la garde ci-dessous
+        held = elevationHold.end();
+    }
     if (held != elevationHold.end() && static_cast<int>(held->second.z) > bestZoom) {
         return held->second.v; // un DEM plus fin a déjà répondu ici : sa valeur reste la meilleure
     }
@@ -1021,6 +1048,11 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID, float x, float 
     const float top = tl + (tr - tl) * fx;
     const float bottom = bl + (br - bl) * fx;
     const float value = top + (bottom - top) * fy;
+    if (!(value >= kMinPlausibleM && value <= kMaxPlausibleM)) {
+        // Décodage aberrant : ne JAMAIS le mémoriser ni le servir — répondre la mémoire saine, sinon 0
+        // (= « inconnu » pour les consommateurs, comme un DEM absent).
+        return (held != elevationHold.end()) ? held->second.v : 0.0f;
+    }
     // Mémorise le meilleur échantillon (à zoom égal, la dernière valeur = données à jour). Borne mémoire.
     if (elevationHold.size() > 100000) {
         elevationHold.clear();
