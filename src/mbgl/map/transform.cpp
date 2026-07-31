@@ -778,11 +778,39 @@ void Transform::renormalizeCenterAltitudeToTerrain() {
     }
     const double eyeAlt = loc->altitude;
     const LatLng c = state.getLatLng();
-    const auto ground = terrainCollisionElevationFn(c);
-    if (!ground || *ground <= 1.0) {
-        return; // terrain inconnu ici → on garde la paramétrisation courante (no-op sûr)
-    }
     const double h0 = state.getCenterAltitude();
+    // Isomaps : cible = PREMIÈRE INTERSECTION RAYON-TERRAIN (ce que l'utilisateur regarde), par marche
+    // le long du rayon de visée. L'ancien « terrain à l'aplomb du centre » était une itération de point
+    // fixe h←ground(centre(h)) : quand le rayon traverse une VALLÉE puis frappe un MASSIF, elle a DEUX
+    // attracteurs et fait du ping-pong (mesuré : zoom 13,2 ↔ 15,7, centreAlt 1918 ↔ 4240, re-cover
+    // complet à chaque flip = clignotement + deux covers superposés entrelacés par la profondeur).
+    // La première intersection est unique et stable par construction.
+    const LatLng eyeLL = loc->location;
+    double hitGround = -1.0;
+    constexpr int kRaySteps = 96;
+    for (int i = 1; i <= kRaySteps; ++i) {
+        const double t = 0.05 + (2.5 - 0.05) * (static_cast<double>(i) / kRaySteps);
+        const double rayAlt = eyeAlt + (h0 - eyeAlt) * t; // le rayon passe par (centre, h0), œil fixe
+        if (rayAlt <= 0.0) {
+            break; // le rayon passe sous le niveau de la mer sans toucher : pas d'intersection utile
+        }
+        const LatLng p(eyeLL.latitude() + (c.latitude() - eyeLL.latitude()) * t,
+                       eyeLL.longitude() + (c.longitude() - eyeLL.longitude()) * t);
+        const auto g = terrainCollisionElevationFn(p);
+        if (g && *g > 1.0 && *g >= rayAlt) {
+            hitGround = *g;
+            break;
+        }
+    }
+    if (hitGround < 0.0) {
+        return; // pas d'intersection trouvée (ciel/terrain inconnu) → paramétrisation courante conservée
+    }
+    // Paroi au ras de l'œil (rayon qui frôle une crête proche) : ne pas dégénérer (e1→0, zoom 20+) —
+    // relever l'œil est le rôle de l'anti-collision, pas du zoom.
+    if (hitGround > eyeAlt - 150.0) {
+        return;
+    }
+    const std::optional<double> ground = hitGround;
     // Convergence : SAUT INSTANTANÉ pour les grands écarts — la reparamétrisation préserve la vue (œil
     // fixe), donc aucun à-coup visuel possible. Lisser les grands deltas (ex. lancement : sol 0 → 2400 m
     // pendant que le DEM s'affine) faisait BALAYER le zoom (14.8→17.1 sur plusieurs secondes) → chaque
@@ -803,7 +831,6 @@ void Transform::renormalizeCenterAltitudeToTerrain() {
     if (zoomNew < state.getMinZoom() || zoomNew > state.getMaxZoom()) {
         return; // un clamp déplacerait l'œil → on ne renormalise pas dans les bornes extrêmes
     }
-    const LatLng eyeLL = loc->location;
     const double s = e1 / e0;
     const LatLng c1(eyeLL.latitude() + (c.latitude() - eyeLL.latitude()) * s,
                     eyeLL.longitude() + (c.longitude() - eyeLL.longitude()) * s);
