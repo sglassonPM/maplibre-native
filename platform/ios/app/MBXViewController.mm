@@ -41,6 +41,247 @@ extern "C" long long isomapsDebugDemBytes(void);
 #endif
 #endif
 
+#import <MetalKit/MetalKit.h> // Isomaps : calque CIEL (custom layer Metal)
+
+// ============================================================================================
+// Isomaps — CALQUE CIEL : dégradé horizon→zénith, soleil au SUD (~40°), teinte plus chaude au
+// sud / plus froide au nord, nuages procéduraux (fbm sur plan d'altitude). Rendu plein écran en
+// PREMIER (au-dessus du background du style, sous tout le reste) : le terrain opaque le recouvre,
+// il ne reste visible que là où rien n'est dessiné (ciel). Sous l'horizon → teinte de la BRUME du
+// terrain (même couleur que le fog du shader terrain) : le lointain se fond au lieu de trancher.
+// ============================================================================================
+typedef struct {
+    float pitch;      // rad
+    float bearing;    // rad (0 = nord, horaire)
+    float tanHalfFov; // tan(fov vertical / 2)
+    float aspect;     // largeur / hauteur
+} IsomapsSkyUniforms;
+
+@interface IsomapsSkyLayer : MLNCustomStyleLayer {
+    id<MTLRenderPipelineState> _pipeline;
+    id<MTLDepthStencilState> _depthState;
+    id<MTLTexture> _skyTexture;   // panorama équirect « isomaps_sky.jpg » (soleil recalé plein centre = SUD)
+    id<MTLSamplerState> _skySampler;
+    BOOL _skyTextureTried;
+}
+@end
+
+@implementation IsomapsSkyLayer
+
+- (void)buildPipeline:(MLNMapView *)mapView {
+    MLNBackendResource *resource = [mapView backendResource];
+    NSString *src = @R"MTL(
+#include <metal_stdlib>
+using namespace metal;
+
+typedef struct { float pitch; float bearing; float tanHalfFov; float aspect; } SkyUniforms;
+struct VOut { float4 pos [[position]]; float2 ndc; };
+
+vertex VOut skyVertex(uint vid [[vertex_id]]) {
+    // Triangle plein écran (couvre [-1,1]²)
+    float2 ndc = float2((vid == 1) ? 3.0 : -1.0, (vid == 2) ? 3.0 : -1.0);
+    VOut o; o.pos = float4(ndc, 0.0, 1.0); o.ndc = ndc; return o;
+}
+
+static float shash(float2 p) {
+    p = fract(p * float2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+static float vnoise(float2 p) {
+    float2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = shash(i), b = shash(i + float2(1, 0)), c = shash(i + float2(0, 1)), d = shash(i + float2(1, 1));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+static float fbm(float2 p) {
+    float v = 0.0, amp = 0.5;
+    for (int i = 0; i < 5; i++) { v += amp * vnoise(p); p = p * 2.03 + 17.17; amp *= 0.5; }
+    return v;
+}
+
+// Variante IMAGE : panorama équirectangulaire (soleil pré-recalé au CENTRE de l'image = plein SUD).
+// u = azimut (sud → 0,5), v = élévation (+90° → 0). Sous l'horizon / près de l'horizon : fondu brume.
+fragment float4 skyFragmentImage(VOut in [[stage_in]],
+                                 constant SkyUniforms& u [[buffer(0)]],
+                                 texture2d<float, access::sample> tex [[texture(0)]],
+                                 sampler smp [[sampler(0)]]) {
+    const float sp = sin(u.pitch), cp = cos(u.pitch);
+    const float sb = sin(u.bearing), cb = cos(u.bearing);
+    const float3 fwd = float3(sb * sp, cb * sp, -cp);
+    const float3 up  = float3(sb * cp, cb * cp,  sp);
+    const float3 rt  = float3(cb, -sb, 0.0);
+    const float3 ray = normalize(fwd + in.ndc.x * u.tanHalfFov * u.aspect * rt + in.ndc.y * u.tanHalfFov * up);
+
+    const float3 fogC = float3(0.72, 0.78, 0.84); // MEME teinte que la brume du shader terrain
+    const float az = atan2(ray.x, ray.y);         // 0 = nord, π = sud
+    const float uu = fract((az - M_PI_F) / (2.0 * M_PI_F) + 0.5); // plein sud → u = 0,5 (soleil)
+    const float vv = clamp(0.5 - asin(clamp(ray.z, -1.0, 1.0)) / M_PI_F, 0.0, 1.0);
+    const float3 img = tex.sample(smp, float2(uu, vv)).rgb;
+    // Raccord : fondu vers la brume sous/près de l'horizon (le sol de l'image ne sert jamais)
+    const float sky = smoothstep(-0.01, 0.10, ray.z);
+    return float4(mix(fogC, img, sky), 1.0);
+}
+
+fragment float4 skyFragment(VOut in [[stage_in]], constant SkyUniforms& u [[buffer(0)]]) {
+    // Rayon monde par pixel. Axes : x = est, y = nord, z = haut. pitch 0 = nadir.
+    const float sp = sin(u.pitch), cp = cos(u.pitch);
+    const float sb = sin(u.bearing), cb = cos(u.bearing);
+    const float3 fwd = float3(sb * sp, cb * sp, -cp);
+    const float3 up  = float3(sb * cp, cb * cp,  sp);
+    const float3 rt  = float3(cb, -sb, 0.0);
+    const float3 ray = normalize(fwd + in.ndc.x * u.tanHalfFov * u.aspect * rt + in.ndc.y * u.tanHalfFov * up);
+
+    const float3 fogC = float3(0.72, 0.78, 0.84); // MEME teinte que la brume du shader terrain
+    // « Sudness » : 1 plein sud, 0 plein nord (composante horizontale du rayon)
+    const float southness = 0.5 + 0.5 * (-ray.y / max(length(ray.xy), 1e-4));
+    const float3 horizonC = mix(float3(0.62, 0.72, 0.88), float3(0.93, 0.86, 0.72), southness);
+    const float3 zenithC  = mix(float3(0.10, 0.28, 0.62), float3(0.22, 0.42, 0.78), southness * 0.7);
+
+    if (ray.z <= 0.0) {
+        // Sous l'horizon : brume — ne reste visible qu'au-delà du terrain rendu (raccord avec le fog)
+        return float4(mix(horizonC, fogC, 0.6), 1.0);
+    }
+
+    float3 sky = mix(horizonC, zenithC, pow(clamp(ray.z, 0.0, 1.0), 0.42));
+
+    // Soleil au SUD (azimut 180°), élévation ~40° : halo chaud + disque
+    const float3 sunDir = float3(0.0, -0.766, 0.643);
+    const float d = max(dot(ray, sunDir), 0.0);
+    sky += float3(1.0, 0.90, 0.65) * (0.45 * pow(d, 24.0) + 0.18 * pow(d, 4.0));
+    sky += float3(1.5) * smoothstep(0.9997, 0.99995, d);
+
+    // Nuages : fbm projeté sur un plan d'altitude (perspective naturelle vers l'horizon)
+    const float2 cuv = ray.xy / max(ray.z, 0.03) * 0.9;
+    const float f = fbm(cuv + float2(13.7, 4.2));
+    float cov = smoothstep(0.52, 0.74, f);
+    cov *= smoothstep(0.02, 0.10, ray.z); // fondu des nuages dans la brume près de l'horizon
+    float3 cloud = mix(float3(0.78, 0.80, 0.84), float3(1.0, 0.99, 0.97), smoothstep(0.5, 0.9, f));
+    cloud += float3(0.20, 0.14, 0.06) * pow(d, 3.0); // face côté soleil réchauffée
+    sky = mix(sky, cloud, cov * 0.85);
+
+    return float4(sky, 1.0);
+}
+)MTL";
+
+    NSError *error = nil;
+    id<MTLDevice> device = resource.device;
+
+    // Image « isomaps_sky.jpg » (équirect, soleil pré-recalé au centre = sud) : si présente dans le
+    // bundle → variante IMAGE ; sinon → ciel procédural. Glisser le JPEG dans la cible Xcode suffit.
+    if (!_skyTextureTried) {
+        _skyTextureTried = YES;
+        NSURL *url = [[NSBundle mainBundle] URLForResource:@"isomaps_sky" withExtension:@"jpg"];
+        if (url) {
+            NSError *texError = nil;
+            MTKTextureLoader *loader = [[MTKTextureLoader alloc] initWithDevice:device];
+            _skyTexture = [loader newTextureWithContentsOfURL:url
+                                                      options:@{
+                                                          MTKTextureLoaderOptionSRGB : @NO,
+                                                          MTKTextureLoaderOptionGenerateMipmaps : @YES
+                                                      }
+                                                        error:&texError];
+            NSLog(@"🌤 CIEL image : %@ (%@)", _skyTexture ? @"chargée" : @"ÉCHEC", texError ?: url);
+        } else {
+            NSLog(@"🌤 CIEL image : isomaps_sky.jpg ABSENTE du bundle → ciel procédural");
+        }
+        if (_skyTexture) {
+            MTLSamplerDescriptor *sd = [[MTLSamplerDescriptor alloc] init];
+            sd.minFilter = MTLSamplerMinMagFilterLinear;
+            sd.magFilter = MTLSamplerMinMagFilterLinear;
+            sd.mipFilter = MTLSamplerMipFilterLinear;
+            sd.sAddressMode = MTLSamplerAddressModeRepeat;       // u = azimut, boucle
+            sd.tAddressMode = MTLSamplerAddressModeClampToEdge;  // v = élévation
+            _skySampler = [device newSamplerStateWithDescriptor:sd];
+        }
+    }
+
+    id<MTLLibrary> library = [device newLibraryWithSource:src options:nil error:&error];
+    if (!library) {
+        NSLog(@"🌤 CIEL : erreur de compilation du shader : %@", error);
+        return;
+    }
+    MTLRenderPipelineDescriptor *desc = [[MTLRenderPipelineDescriptor alloc] init];
+    desc.label = @"isomaps-sky";
+    desc.vertexFunction = [library newFunctionWithName:@"skyVertex"];
+    desc.fragmentFunction =
+        [library newFunctionWithName:(_skyTexture && _skySampler) ? @"skyFragmentImage" : @"skyFragment"];
+    desc.colorAttachments[0].pixelFormat = resource.mtkView.colorPixelFormat;
+    desc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+    desc.stencilAttachmentPixelFormat = MTLPixelFormatDepth32Float_Stencil8;
+    desc.rasterSampleCount = resource.mtkView.sampleCount;
+    _pipeline = [device newRenderPipelineStateWithDescriptor:desc error:&error];
+    if (!_pipeline) {
+        NSLog(@"🌤 CIEL : échec du pipeline : %@", error);
+        return;
+    }
+    NSLog(@"🌤 CIEL : pipeline prêt (%@)", (_skyTexture && _skySampler) ? @"image" : @"procédural");
+
+    // Le ciel est émis à z clip = 0 = PLAN LOINTAIN de la convention reversed-Z du terrain (clear 0,
+    // GreaterEqual). Test 0 ≥ buffer : ne passe que là où RIEN n'a été dessiné (buffer resté au clear),
+    // jamais par-dessus le terrain (z' > 0) — quel que soit l'ordre de rendu des groupes. Pas d'écriture.
+    // Sans terrain (style 2D, clear 1.0) : 0 ≥ 1 faux partout → ciel invisible, voulu.
+    MTLDepthStencilDescriptor *dsDesc = [[MTLDepthStencilDescriptor alloc] init];
+    dsDesc.depthCompareFunction = MTLCompareFunctionGreaterEqual;
+    dsDesc.depthWriteEnabled = NO;
+    _depthState = [resource.device newDepthStencilStateWithDescriptor:dsDesc];
+}
+
+- (void)drawInMapView:(MLNMapView *)mapView withContext:(MLNStyleLayerDrawingContext)context {
+    if (!_pipeline) {
+        [self buildPipeline:mapView];
+    }
+    id<MTLRenderCommandEncoder> encoder = self.renderEncoder;
+    if (!encoder || !_pipeline) {
+        static int s_skyErr = 0;
+        if ((s_skyErr++ % 300) == 0) {
+            NSLog(@"🌤 CIEL draw BLOQUÉ : encoder=%@ pipeline=%@", encoder ? @"oui" : @"NON",
+                  _pipeline ? @"oui" : @"NON");
+        }
+        return;
+    }
+    IsomapsSkyUniforms u;
+    // PIÈGE (bis) : context.pitch arrive en RADIANS (custom_layer_render_parameters : state.getPitch()),
+    // le header dit « degrees » à tort — comme fieldOfView. direction, elle, est bien en degrés (wrap 0-360).
+    double pitchIn = context.pitch;
+    if (pitchIn > M_PI) {
+        pitchIn = pitchIn * M_PI / 180.0; // au cas où l'amont passerait un jour en degrés
+    }
+    u.pitch = (float)pitchIn;
+    u.bearing = (float)(context.direction * M_PI / 180.0);
+    // PIÈGE : le header dit « degrees » mais TransformState::getFieldOfView renvoie des RADIANS
+    // (~0,6435). Le traiter en degrés → tanHalfFov ≈ 0,006 → un seul rayon pour tout l'écran →
+    // ciel monochrome sans dégradé (constaté). Garde : > π = degrés (au cas où l'amont change).
+    double fov = context.fieldOfView;
+    if (fov <= 0) {
+        fov = 0.6435; // défaut MapLibre : 2·atan(1/3)
+    } else if (fov > M_PI) {
+        fov = fov * M_PI / 180.0;
+    }
+    u.tanHalfFov = (float)tan(fov / 2.0);
+    u.aspect = (float)(context.size.height > 0 ? context.size.width / context.size.height : 1.0);
+    // PIÈGE Metal : les drawables mbgl laissent leur SCISSOR de tuile sur l'encoder → notre triangle
+    // plein écran serait découpé à la dernière tuile dessinée (ciel invisible, constaté). On le remet
+    // plein cadre.
+    CGSize ds = [mapView backendResource].mtkView.drawableSize;
+    if (ds.width > 0 && ds.height > 0) {
+        MTLScissorRect full = {0, 0, (NSUInteger)ds.width, (NSUInteger)ds.height};
+        [encoder setScissorRect:full];
+    }
+    [encoder setCullMode:MTLCullModeNone]; // état hérité : un cull back éliminerait notre triangle CCW
+    [encoder setStencilReferenceValue:0];
+    [encoder setRenderPipelineState:_pipeline];
+    [encoder setDepthStencilState:_depthState];
+    [encoder setFragmentBytes:&u length:sizeof(u) atIndex:0];
+    if (_skyTexture && _skySampler) {
+        [encoder setFragmentTexture:_skyTexture atIndex:0];
+        [encoder setFragmentSamplerState:_skySampler atIndex:0];
+    }
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+}
+
+@end
+
 static const CLLocationCoordinate2D WorldTourDestinations[] = {
     {.latitude = 38.8999418, .longitude = -77.033996},
     {.latitude = 37.7884307, .longitude = -122.3998631},
@@ -3041,6 +3282,24 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
         [mapView setCamera:[self isomapsReferenceCamera] animated:NO];
     }
 
+    // Isomaps — calque CIEL : inséré AU-DESSUS du background du style (sinon le background le
+    // masquerait) et sous tout le reste : le terrain opaque le recouvre, seul le ciel le montre.
+    if (![style layerWithIdentifier:@"isomaps-sky"]) {
+        IsomapsSkyLayer *sky = [[IsomapsSkyLayer alloc] initWithIdentifier:@"isomaps-sky"];
+        MLNStyleLayer *background = nil;
+        for (MLNStyleLayer *layer in style.layers) {
+            if ([layer isKindOfClass:[MLNBackgroundStyleLayer class]]) {
+                background = layer;
+                break;
+            }
+        }
+        if (background) {
+            [style insertLayer:sky aboveLayer:background];
+        } else {
+            [style insertLayer:sky atIndex:0];
+        }
+    }
+
     // Isomaps — overlay du pitch en temps reel, pour reperer le seuil ou les trous reapparaissent.
     if (!self.isomapsPitchLabel) {
         UILabel *lbl = [[UILabel alloc] init];
@@ -3333,11 +3592,13 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
   // Isomaps TEST : départ pitch 0 au-dessus du Nid d'Aigle (gare TMB, ~2372 m). ALTITUDE ASL explicite
   // (2600 m ≈ 230 m/sol) : l'API caméra est aveugle au relief — acrossDistance:600 posait l'œil à 482 m
   // ASL, 1900 m SOUS la montagne → écran bleu au lancement jusqu'au premier geste (collision).
+  // Isomaps TEST CIEL : départ à NYON (rive du Léman, terrain plat — la butée ne bride pas le pitch),
+  // pitch 70, regard SUD (plein soleil du panorama) au-dessus du lac vers les Alpes.
   MLNMapCamera *cam = [MLNMapCamera camera];
-  cam.centerCoordinate = CLLocationCoordinate2DMake(45.8547, 6.7906);
-  cam.altitude = 3600; // la conversion altitude→zoom rabote ~20 % (3600 → œil ~2900 ASL ≈ 500 m/sol à 2372)
-  cam.pitch = 0;
-  cam.heading = 0;
+  cam.centerCoordinate = CLLocationCoordinate2DMake(46.3832, 6.2396);
+  cam.altitude = 2500;
+  cam.pitch = 84; // l'horizon optique n'entre dans l'écran qu'au-delà de ~72° (fov vertical 36,9°)
+  cam.heading = 180;
   return cam;
 }
 
