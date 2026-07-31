@@ -5,6 +5,8 @@
 // 🧪 Isomaps DIAG (à retirer) — compteurs de tuiles du terrain, exposés par le moteur (render_terrain.cpp).
 extern "C" int isomapsDebugMeshTileCount(void);
 extern "C" int isomapsDebugSatTileCount(void);
+extern "C" long long isomapsDebugSatBytes(void);
+extern "C" long long isomapsDebugDemBytes(void);
 
 #import "MBXViewController.h"
 
@@ -3025,10 +3027,11 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
         {9000, 60, 320},  // rapprochée
     };
     // Lever le plafond d'inclinaison (60° par défaut) pour pouvoir regarder l'horizon
-    // et le ciel au-dessus du relief.
-    mapView.maximumPitch = 120.0;  // Isomaps : >90° pour lever les yeux vers un sommet (regard montant).
-    // Le cœur autorise jusqu'à 180° (PITCH_MAX=π) ; au-delà de 90° le rendu (ciel/horizon/profondeur)
-    // reste à bâtir — plafond de test à 120° pour explorer le regard montant à la main.
+    // au-dessus du relief. PLAFOND STRICT < 90° : dans la paramétrisation orbitale (œil autour du
+    // CENTRE), pitch > 90° fait passer l'œil SOUS le plan du centre (constaté : œil à −5 123 m,
+    // « terre en haut, ciel en bas » pendant le geste). Le « regard montant » vers un sommet se fera
+    // par une cible de visée relevée / caméra libre, pas en dépassant 90° ici. 85° = plafond Mapbox.
+    mapView.maximumPitch = 85.0;
 
     // Isomaps TEST — pose la caméra de RÉFÉRENCE (vue oblique Sallanches→Mont-Blanc) à chaque lancement,
     // identique à chaque fois, sans mémoriser la dernière position (cf. isomapsReferenceCamera). Une seule
@@ -3079,8 +3082,10 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
             // Log toutes les ~2 s (8 ticks de 0,25 s) pour corréler avec 🧭 STATUS.
             static int memTick = 0;
             if ((memTick++ % 8) == 0) {
-                NSLog(@"🧠 MEM footprint=%.0f Mo · maillage=%d · satTex=%d", memMB,
-                      isomapsDebugMeshTileCount(), isomapsDebugSatTileCount());
+                NSLog(@"🧠 MEM footprint=%.0f Mo · maillage=%d · satTex=%d (%.0f Mo) · demTex %.0f Mo", memMB,
+                      isomapsDebugMeshTileCount(), isomapsDebugSatTileCount(),
+                      (double)isomapsDebugSatBytes() / (1024.0 * 1024.0),
+                      (double)isomapsDebugDemBytes() / (1024.0 * 1024.0));
             }
         }];
     }

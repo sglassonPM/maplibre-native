@@ -1661,7 +1661,25 @@ public:
     // UIView update logic has moved into `renderSync` above, which now gets
     // triggered by a call to setNeedsDisplay.
     // See MLNMapViewOpenGLImpl::display() for more details
+    // ⏱ Isomaps DIAG fluidité (à retirer) : durée du tick complet (update+rendu, thread principal).
+    // Seules les frames > 20 ms comptent ; une ligne agrégée par seconde au plus.
+    CFTimeInterval isomapsT0 = CACurrentMediaTime();
     _mbglView->display();
+    double isomapsMs = (CACurrentMediaTime() - isomapsT0) * 1000.0;
+    static CFTimeInterval isomapsLastLog = 0;
+    static int isomapsSpikes = 0;
+    static double isomapsWorst = 0;
+    if (isomapsMs > 20.0) {
+      isomapsSpikes++;
+      isomapsWorst = MAX(isomapsWorst, isomapsMs);
+    }
+    CFTimeInterval isomapsNow = CACurrentMediaTime();
+    if (isomapsSpikes > 0 && isomapsNow - isomapsLastLog > 1.0) {
+      NSLog(@"⏱ TICK ×%d pire=%.0fms", isomapsSpikes, isomapsWorst);
+      isomapsSpikes = 0;
+      isomapsWorst = 0;
+      isomapsLastLog = isomapsNow;
+    }
   }
 
   // TODO: Fix
@@ -2761,8 +2779,10 @@ public:
 
   self.cameraChangeReasonBitmask |= MLNCameraChangeReasonGestureTilt;
   static CGFloat initialPitch;
+  static BOOL tiltEngaged; // Isomaps : le filtre d'angle ne sert qu'à ENGAGER le geste (cf. plus bas)
 
   if (twoFingerDrag.state == UIGestureRecognizerStateBegan) {
+    tiltEngaged = NO;
     CGPoint midPoint = [twoFingerDrag translationInView:twoFingerDrag.view];
     // In the following if and for the first execution middlePoint
     // will be equal to dragGestureMiddlePoint and the resulting
@@ -2792,25 +2812,28 @@ public:
     CLLocationDegrees gestureSlopeAngle = [self angleBetweenPoints:self.dragGestureMiddlePoint
                                                           endPoint:middlePoint];
     self.dragGestureMiddlePoint = middlePoint;
-    // Isomaps — geste d'inclinaison (2 doigts vers le haut/bas) rendu plus tolérant : l'amont
-    // exigeait des doigts quasi horizontaux (<45°) ET un glissement quasi vertical (>60°), d'où un
-    // geste qui « ne prend » qu'à la perfection. On élargit : doigts jusqu'à ~65° d'inclinaison,
-    // glissement à partir de ~40° de la verticale. Reste distinct du pinch (échelle) et de la
-    // rotation (angle des doigts qui change).
-    if (fabs(fingerSlopeAngle) < 65.0 && fabs(gestureSlopeAngle) > 40.0) {
+    // Isomaps — le filtre d'angle (doigts ~horizontaux, glissement ~vertical) ne sert qu'à ENGAGER
+    // le geste. L'amont le réévaluait à CHAQUE événement : un seul delta bruité → mise à jour sautée,
+    // puis RATTRAPAGE cumulé à l'événement suivant → gels + à-coups (« pas fluide du tout » vs
+    // Mapbox, qui applique chaque événement une fois le geste engagé). Une fois engagé, seule la
+    // composante verticale pilote le pitch, en continu.
+    if (!tiltEngaged && fabs(fingerSlopeAngle) < 65.0 && fabs(gestureSlopeAngle) > 40.0) {
+      tiltEngaged = YES;
+    }
+    if (tiltEngaged) {
       CGFloat gestureDistance = middlePoint.y;
       CGFloat slowdown = 2.0;
 
       CGFloat pitchNew = initialPitch - (gestureDistance / slowdown);
 
-      CGPoint centerPoint = [self anchorPointForGesture:twoFingerDrag];
-
       MLNMapCamera *oldCamera = self.camera;
       MLNMapCamera *toCamera = [self cameraByTiltingToPitch:pitchNew];
 
       if ([self _shouldChangeFromCamera:oldCamera toCamera:toCamera]) {
-        self.mbglMap.jumpTo(mbgl::CameraOptions().withPitch(pitchNew).withAnchor(
-            mbgl::ScreenCoordinate{centerPoint.x, centerPoint.y}));
+        // Isomaps : PAS d'ancre pour l'inclinaison — on pivote autour du centre (façon Mapbox).
+        // Ancrer le point médian des doigts déplaçait le CENTRE à chaque événement → recalculs de
+        // cover/maillage en pleine bascule (saccades) et dérive du cadrage.
+        self.mbglMap.jumpTo(mbgl::CameraOptions().withPitch(pitchNew));
       }
 
       [self cameraIsChanging];
