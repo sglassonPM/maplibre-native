@@ -282,6 +282,15 @@ private:
     // (0 = placeholder/flat, 1 = ancestor fallback, 2 = own DEM); a drawable
     // is replaced whenever a higher tier becomes available
     std::unordered_map<OverscaledTileID, uint8_t> tilesWithDrawables;
+    // Isomaps ⏱ : ÉPOQUE DES LIAISONS. Incrémentée quand une texture DEM est décodée ou que l'ensemble des
+    // tuiles satellite change ; chaque drawable mémorise l'époque à laquelle ses liaisons (DEM + satellite)
+    // ont été résolues. « À jour » = test O(1) → l'entretien au repos est gratuit et la boucle CONVERGE
+    // (silence au repos) ; « périmé » = re-résolution, et la continuation budgétée est demandée tant qu'il
+    // en reste → une tuile liée à un ancêtre flou finit TOUJOURS par monter en qualité (avant : tier 2
+    // sautait sans regarder le satellite → flou permanent si le DEM arrivait avant sa tuile satellite).
+    uint64_t bindingsEpoch = 1;
+    std::map<OverscaledTileID, uint64_t> drawableEpoch;
+    std::set<UnwrappedTileID> lastBasemapKeys;
 
     // Per-drawable scale/offset into the bound DEM texture ({1,0,0,0} unless
     // an ancestor tile's DEM is bound); read by the terrain layer tweaker

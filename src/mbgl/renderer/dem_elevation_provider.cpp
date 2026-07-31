@@ -10,7 +10,39 @@ namespace mbgl {
 
 DEMElevationProvider::DEMElevationProvider(const RenderSource* demSource_, double exaggeration_)
     : demSource(demSource_),
-      exaggeration(exaggeration_) {}
+      exaggeration(exaggeration_) {
+    if (!demSource) {
+        return;
+    }
+    // Isomaps ⏱ : index construit UNE fois par instance (= par passe de cover) — voir le header.
+    // Toujours TOUTES les tuiles CHARGÉES (rendues + retenues hors frustum, ex. aperçu z7/z10
+    // anti-collision), pas seulement les rendues : sinon une zone sans tuile DEM RENDUE n'a aucune plage
+    // d'altitude → son AABB de frustum reste PLAT au niveau de la mer → à fort pitch près d'un sommet la
+    // tuile est jugée hors champ → jamais demandée → jamais élevée (trou auto-entretenu).
+    const auto considerIndex = [&](const CanonicalTileID& candidate, const Tile& tile) {
+        if (tile.kind != Tile::Kind::RasterDEM) {
+            return;
+        }
+        const auto* demTile = static_cast<const RasterDEMTile*>(&tile);
+        const auto* bucket = const_cast<RasterDEMTile*>(demTile)->getBucket();
+        if (!bucket) {
+            return;
+        }
+        index.emplace(candidate, &bucket->getDEMData()); // doublons overscalés : premier gagnant, même DEM
+    };
+    if (const auto* loaded = demSource->getLoadedTiles()) {
+        for (const auto& [oid, tilePtr] : *loaded) {
+            if (tilePtr) {
+                considerIndex(oid.canonical, *tilePtr);
+            }
+        }
+    } else {
+        const auto renderTiles = demSource->getRawRenderTiles();
+        for (const auto& renderTile : *renderTiles) {
+            considerIndex(renderTile.id.canonical, renderTile.getTile());
+        }
+    }
+}
 
 std::optional<Range<double>> DEMElevationProvider::getTileElevationRange(const CanonicalTileID& id) const {
     return getTileElevationRange(id, nullptr);
@@ -24,43 +56,15 @@ std::optional<Range<double>> DEMElevationProvider::getTileElevationRange(const C
 
     // The tile's own DEM, or failing that the deepest loaded ancestor: an ancestor's
     // range covers this tile's area, so it stays conservative, just looser.
+    // Isomaps ⏱ : remontée de chaîne parentale sur l'index (≤ z lookups) — réponse IDENTIQUE à l'ancien
+    // balayage de toutes les tuiles chargées (le premier trouvé en descendant est le plus profond).
     const DEMData* best = nullptr;
     uint8_t bestZoom = 0;
-    const auto consider = [&](const CanonicalTileID& candidate, const Tile& tile) -> bool {
-        if (tile.kind != Tile::Kind::RasterDEM) {
-            return false;
-        }
-        const bool covers = candidate == id || id.isChildOf(candidate);
-        if (!covers || (best && candidate.z <= bestZoom)) {
-            return false;
-        }
-        const auto* demTile = static_cast<const RasterDEMTile*>(&tile);
-        const auto* bucket = const_cast<RasterDEMTile*>(demTile)->getBucket();
-        if (!bucket) {
-            return false;
-        }
-        best = &bucket->getDEMData();
-        bestZoom = candidate.z;
-        return candidate == id; // exact match; nothing looser can improve on it
-    };
-
-    // Isomaps : parcourir TOUTES les tuiles CHARGÉES (rendues + retenues hors frustum, ex. aperçu z7/z10
-    // anti-collision), pas seulement les rendues. Sinon une zone sans tuile DEM RENDUE n'a aucune plage
-    // d'altitude → son AABB de frustum reste PLAT au niveau de la mer → à fort pitch près d'un sommet la
-    // tuile est jugée hors champ → jamais demandée → jamais élevée (trou auto-entretenu : faces de sommet
-    // « transparentes », fond visible). L'aperçu grossier retenu comble exactement ce vide.
-    if (const auto* loaded = demSource->getLoadedTiles()) {
-        for (const auto& [oid, tilePtr] : *loaded) {
-            if (tilePtr && consider(oid.canonical, *tilePtr)) {
-                break;
-            }
-        }
-    } else {
-        const auto renderTiles = demSource->getRawRenderTiles();
-        for (const auto& renderTile : *renderTiles) {
-            if (consider(renderTile.id.canonical, renderTile.getTile())) {
-                break;
-            }
+    for (int zz = static_cast<int>(id.z); zz >= 0 && !best; --zz) {
+        const auto it = index.find(id.scaledTo(static_cast<uint8_t>(zz)));
+        if (it != index.end()) {
+            best = it->second;
+            bestZoom = static_cast<uint8_t>(zz);
         }
     }
 

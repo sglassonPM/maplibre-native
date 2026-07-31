@@ -187,6 +187,8 @@ public:
     /// DIAG isomaps : mesuré AU RENDU (dernière frame). terrainDraping actif + nb TileLayerGroups sautés.
     int isomapsLastDraping = 0;
     int isomapsLastSkipped = 0;
+    // Isomaps : demande une frame supplémentaire (terrain sous budget-temps : créations reportées).
+    void isomapsRequestRepaint();
 
 private:
     bool isLoaded() const;

@@ -11,6 +11,7 @@
 namespace mbgl {
 
 class RenderSource;
+class DEMData;
 
 /// Answers "how high is the terrain here?" for util::tileCover, from the DEM source's
 /// currently loaded tiles, so that sources are asked for the tiles the terrain mesh
@@ -34,6 +35,12 @@ public:
 private:
     const RenderSource* demSource;
     double exaggeration;
+    // Isomaps ⏱ : INDEX des DEM chargés, construit UNE fois par instance (= par passe de cover). Chaque
+    // requête remonte la chaîne parentale (≤ z lookups) au lieu de balayer toutes les tuiles chargées —
+    // l'ancien O(nœuds × tuiles chargées) dominait les passes UPDATE (100-315 ms mesurés). La RÉPONSE est
+    // inchangée (propre DEM, sinon ancêtre chargé le plus profond) : pas de cache de réponses, pas de
+    // staleness (contrairement au cache-first réverté) — données DEM lues en direct à la requête.
+    std::map<CanonicalTileID, const DEMData*> index;
 };
 
 /// DEMElevationProvider dont chaque reponse est fondue (union monotone) avec la plus large deja

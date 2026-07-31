@@ -48,9 +48,14 @@
 namespace {
 std::atomic<int> g_isomapsMeshTiles{0};
 std::atomic<int> g_isomapsSatTiles{0};
+// Isomaps 🧠 : octets GPU réels des textures (mesurés, pas estimés) — pour attribuer le footprint.
+std::atomic<long long> g_isomapsSatBytes{0};
+std::atomic<long long> g_isomapsDemBytes{0};
 } // namespace
 extern "C" int isomapsDebugMeshTileCount() { return g_isomapsMeshTiles.load(std::memory_order_relaxed); }
 extern "C" int isomapsDebugSatTileCount() { return g_isomapsSatTiles.load(std::memory_order_relaxed); }
+extern "C" long long isomapsDebugSatBytes() { return g_isomapsSatBytes.load(std::memory_order_relaxed); }
+extern "C" long long isomapsDebugDemBytes() { return g_isomapsDemBytes.load(std::memory_order_relaxed); }
 
 namespace mbgl {
 
@@ -332,6 +337,15 @@ void RenderTerrain::rebuildBasemapTextures() {
             basemapTextures[renderTile.id] = bucket->texture2d;
         }
     }
+    // Isomaps ⏱ : l'ensemble des tuiles satellite a changé → les liaisons des drawables sont à re-résoudre.
+    std::set<UnwrappedTileID> keys;
+    for (const auto& [id, tex] : basemapTextures) {
+        keys.insert(id);
+    }
+    if (keys != lastBasemapKeys) {
+        lastBasemapKeys = std::move(keys);
+        ++bindingsEpoch;
+    }
 }
 
 std::shared_ptr<gfx::Texture2D> RenderTerrain::getBasemapTextureForTile(
@@ -365,6 +379,8 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                            const std::shared_ptr<UpdateParameters>& updateParameters,
                            const RenderTree& /*renderTree*/,
                            UniqueChangeRequestVec& changes) {
+    // ⏱ Isomaps DIAG fluidité (à retirer) : durée de la mise à jour du maillage terrain.
+    const double isomapsMeshT0 = util::MonotonicTimer::now().count();
     // Find the DEM source if we haven't already
     if (!demSource && !impl->sourceID.empty()) {
         demSource = orchestrator.getRenderSource(impl->sourceID);
@@ -439,6 +455,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             } else if (auto texture = createDEMTexture(context, *demData)) {
                 // Keep the texture available for elevation sampling by non-draped layers
                 demTextures[renderTile.id] = {texture, demData->dim, demUpdateCounter};
+                ++bindingsEpoch; // nouveau DEM décodé → liaisons à re-résoudre
             }
         }
     }
@@ -466,6 +483,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                 demDim = demData->dim;
                 if (auto texture = createDEMTexture(context, *demData)) {
                     demTextures[uid] = {texture, demData->dim, demUpdateCounter};
+                    ++bindingsEpoch; // aperçu DEM décodé → liaisons à re-résoudre
                 }
             }
         }
@@ -478,6 +496,20 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     lastRenderedMeshTiles = meshTiles;
     g_isomapsMeshTiles.store(static_cast<int>(meshTiles.size()), std::memory_order_relaxed);
     g_isomapsSatTiles.store(static_cast<int>(basemapTextures.size()), std::memory_order_relaxed);
+    {
+        // Isomaps 🧠 : octets GPU RÉELS (getDataSize) des deux caches de textures — pour attribuer le
+        // footprint (jetsam à ~3,4 Go observé) plutôt que l'estimer par les comptes.
+        long long satB = 0;
+        for (const auto& [id, tex] : basemapTextures) {
+            if (tex) satB += static_cast<long long>(tex->getDataSize());
+        }
+        long long demB = 0;
+        for (const auto& [id, entry] : demTextures) {
+            if (entry.texture) demB += static_cast<long long>(entry.texture->getDataSize());
+        }
+        g_isomapsSatBytes.store(satB, std::memory_order_relaxed);
+        g_isomapsDemBytes.store(demB, std::memory_order_relaxed);
+    }
 
     // 🧭 STATUS (diag léger permanent) — 1 ligne / 2 s : zoom, œil, maillage, textures. Suivi longue durée
     // (drain du maillage, charge mémoire textures) sans spam.
@@ -517,40 +549,34 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     // Reset des compteurs de dessin (incrémentés dans la boucle ci-dessous, lus au prochain STATUS).
     s_drawn = s_skipBM = s_skipDEM = 0;
 
-    // Drop drawables and cached DEM textures for tiles that left the mesh tile
-    // set, keeping everything else intact between frames
+    // Isomaps : le RETRAIT des drawables sortis du cover est déplacé APRÈS la boucle de création et
+    // conditionné à la RE-COUVERTURE (cf. bloc en fin de fonction). Sous budget-temps, retirer d'abord
+    // et créer plus tard laissait des trous pendant la bascule (« tuiles qui s'effacent »).
     std::unordered_set<OverscaledTileID> currentTiles;
     for (const auto& id : meshTiles) {
         currentTiles.emplace(id.canonical.z, id.wrap, id.canonical);
     }
-    lg->removeDrawablesIf(
-        [&](gfx::Drawable& drawable) { return drawable.getTileID() && !currentTiles.contains(*drawable.getTileID()); });
     auto* depthLg = static_cast<LayerGroup*>(depthLayerGroup.get());
-    if (depthLg) {
-        depthLg->removeDrawablesIf([&](gfx::Drawable& drawable) {
-            return drawable.getTileID() && !currentTiles.contains(*drawable.getTileID());
-        });
-    }
-    for (auto it = tilesWithDrawables.begin(); it != tilesWithDrawables.end();) {
-        if (!currentTiles.contains(it->first)) {
-            drawableDemCoords.erase(it->first);
-            drawableMapCoords.erase(it->first);
-            it = tilesWithDrawables.erase(it);
-        } else {
-            ++it;
-        }
-    }
     // Retain cached DEM textures that are related to the current tile set so they
     // can serve as ancestor fallbacks while exact tiles load (as maplibre-gl-js
-    // retains terrain tiles in its source cache); drop unrelated ones
+    // retains terrain tiles in its source cache); drop unrelated ones.
+    // Isomaps ⏱ : test de parenté en O(z) par ENTRÉE (remontée de chaîne parentale + ensemble des
+    // ancêtres du maillage) — l'ancien double balayage isChildOf était O(maillage × textures)
+    // ≈ 80 000 tests PAR PASSE avec ~500 textures : un des planchers mesurés des saccades.
+    std::set<UnwrappedTileID> meshSet;
+    std::set<UnwrappedTileID> meshAndAncestors;
+    for (const auto& id : meshTiles) {
+        meshSet.insert(id);
+        for (int zz = static_cast<int>(id.canonical.z); zz >= 0; --zz) {
+            meshAndAncestors.emplace(id.wrap, id.canonical.scaledTo(static_cast<uint8_t>(zz)));
+        }
+    }
     for (auto it = demTextures.begin(); it != demTextures.end();) {
-        bool related = false;
-        for (const auto& current : currentTiles) {
-            const UnwrappedTileID unwrapped = current.toUnwrapped();
-            if (unwrapped == it->first || unwrapped.isChildOf(it->first) || it->first.isChildOf(unwrapped)) {
-                related = true;
-                break;
-            }
+        const UnwrappedTileID& tex = it->first;
+        bool related = meshAndAncestors.contains(tex); // tuile du maillage ou ancêtre d'une d'elles
+        for (int zz = static_cast<int>(tex.canonical.z) - 1; zz >= 0 && !related; --zz) {
+            // descendante d'une tuile du maillage ?
+            related = meshSet.contains(UnwrappedTileID(tex.wrap, tex.canonical.scaledTo(static_cast<uint8_t>(zz))));
         }
         it = related ? std::next(it) : demTextures.erase(it);
     }
@@ -584,14 +610,17 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     // on la comble en alignant l'arete sur la resolution de la voisine.
     meshTileDemZoom.clear();
     for (const auto& id : meshTiles) {
-        if (demTextures.contains(id)) {
+        // Isomaps ⏱ : remontée parentale directe (≤z lookups) au lieu du balayage de toutes les textures.
+        if (auto own = demTextures.find(id); own != demTextures.end()) {
+            own->second.lastUsed = demUpdateCounter; // touche : protège de l'éviction sous budget-temps
             meshTileDemZoom[id] = static_cast<int>(id.canonical.z);
             continue;
         }
         int best = -1;
-        for (const auto& [cand, entry] : demTextures) {
-            if (id.isChildOf(cand) && static_cast<int>(cand.canonical.z) > best) {
-                best = static_cast<int>(cand.canonical.z);
+        for (int zz = static_cast<int>(id.canonical.z) - 1; zz >= 0; --zz) {
+            if (demTextures.contains(UnwrappedTileID(id.wrap, id.canonical.scaledTo(static_cast<uint8_t>(zz))))) {
+                best = zz;
+                break;
             }
         }
         meshTileDemZoom[id] = best;
@@ -630,15 +659,72 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         drawableEdgeDz[OverscaledTileID(id.canonical.z, id.wrap, id.canonical)] = dz;
     }
 
-    // Create terrain drawables for each mesh tile
-    for (const auto& unwrapped : meshTiles) {
+    // Create terrain drawables for each mesh tile.
+    // Isomaps ⏱ BUDGET-TEMPS : créer ~4 ms/drawable × 100+ tuiles dans UNE frame = les pics mesurés de
+    // 500-900 ms pendant la bascule. On trie CENTRE D'ABORD et on s'arrête au budget : l'existant reste
+    // affiché (échange en place / ancêtres), le reste se crée sur les frames suivantes (repaint demandé).
+    constexpr double kMeshBudgetMs = 8.0;
+    bool isomapsBudgetOut = false;
+    // Budget mesuré depuis le DÉBUT DE LA BOUCLE DE CRÉATION — pas depuis le début d'update() : la phase
+    // pré-boucle (computeMeshCover…) peut dépasser 8 ms à elle seule → budget épuisé avant la PREMIÈRE
+    // création → famine totale (constaté : dessinés=0 en boucle, drawables figés, repaints infinis).
+    const double isomapsCreateT0 = util::MonotonicTimer::now().count();
+    std::vector<UnwrappedTileID> orderedMeshTiles(meshTiles.begin(), meshTiles.end());
+    {
+        const auto ctr = TileCoordinate::fromLatLng(0, state.getLatLng()).p; // centre en mercator [0..1]
+        std::sort(orderedMeshTiles.begin(), orderedMeshTiles.end(), [&](const auto& a, const auto& b) {
+            const double sa = std::exp2(static_cast<double>(a.canonical.z));
+            const double sb = std::exp2(static_cast<double>(b.canonical.z));
+            const double dax = (a.canonical.x + 0.5) / sa - ctr.x;
+            const double day = (a.canonical.y + 0.5) / sa - ctr.y;
+            const double dbx = (b.canonical.x + 0.5) / sb - ctr.x;
+            const double dby = (b.canonical.y + 0.5) / sb - ctr.y;
+            return dax * dax + day * day < dbx * dbx + dby * dby;
+        });
+    }
+    for (size_t tileIdx = 0; tileIdx < orderedMeshTiles.size(); ++tileIdx) {
+        const auto& unwrapped = orderedMeshTiles[tileIdx];
         const OverscaledTileID tileID(unwrapped.canonical.z, unwrapped.wrap, unwrapped.canonical);
 
-        // Skip if the tile already has a drawable bound to its own DEM
-        if (const auto existing = tilesWithDrawables.find(tileID);
-            existing != tilesWithDrawables.end() && existing->second == 2) {
-            ++s_drawn;
-            continue;
+        // Fast-skip O(1) : drawable dont les liaisons sont À JOUR (rien de neuf depuis sa résolution), ou
+        // déjà au MAXIMUM (DEM propre + satellite exact — rien à améliorer). L'ancien critère « tier 2 »
+        // seul ignorait le satellite : DEM arrivé avant sa tuile satellite → lié à l'ancêtre FLOU à vie.
+        if (const auto existing = tilesWithDrawables.find(tileID); existing != tilesWithDrawables.end()) {
+            const auto itE = drawableEpoch.find(tileID);
+            const bool upToDate = itE != drawableEpoch.end() && itE->second == bindingsEpoch;
+            bool exactMap = true;
+            if (basemapSource) {
+                const auto exMap = drawableMapCoords.find(tileID);
+                exactMap = exMap != drawableMapCoords.end() && exMap->second[0] >= 1.0f;
+            }
+            if (upToDate || (existing->second == 2 && exactMap)) {
+                drawableEpoch[tileID] = bindingsEpoch; // stampe le cas « au maximum » → plus jamais pendant
+                ++s_drawn;
+                continue;
+            }
+        }
+
+        // Budget épuisé : on reporte le reste (plus périphérique, la liste est triée) à la frame suivante.
+        // CONVERGENCE : la continuation (repaint) n'est demandée que s'il reste une tuile SANS drawable —
+        // la seule dont l'absence fait un trou. Sinon (reste = simples montées en qualité tier<2), on
+        // s'arrête là : l'arrivée d'une texture déclenche déjà son propre update. Sans ce test, le seul
+        // ENTRETIEN de ~200 tuiles dépassait 8 ms → repaint → re-entretien → boucle infinie AU REPOS
+        // (mesuré : UPDATE ×5/s à 55 ms sans toucher l'écran).
+        if ((util::MonotonicTimer::now().count() - isomapsCreateT0) * 1000.0 > kMeshBudgetMs) {
+            for (size_t j = tileIdx; j < orderedMeshTiles.size(); ++j) {
+                const OverscaledTileID rid(
+                    orderedMeshTiles[j].canonical.z, orderedMeshTiles[j].wrap, orderedMeshTiles[j].canonical);
+                if (!tilesWithDrawables.contains(rid)) {
+                    isomapsBudgetOut = true; // trou potentiel → continuer coûte que coûte
+                    break;
+                }
+                const auto itE = drawableEpoch.find(rid);
+                if (itE == drawableEpoch.end() || itE->second != bindingsEpoch) {
+                    isomapsBudgetOut = true; // liaisons périmées (montée en qualité en attente) → continuer
+                    break;
+                }
+            }
+            break;
         }
 
         // Resolve the DEM texture: the tile's own decoded DEM if available,
@@ -658,17 +744,19 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             demTexture = cached->second.texture;
             demTier = 2;
         } else {
-            // Fall back to the closest cached ancestor DEM
+            // Fall back to the closest cached ancestor DEM.
+            // Isomaps ⏱ : remontée parentale directe (≤z lookups) au lieu du balayage complet du cache.
             const UnwrappedTileID* ancestorID = nullptr;
             DEMTextureEntry* ancestorEntry = nullptr;
-            int bestZoom = -1;
-            for (auto& [candidate, entry] : demTextures) {
-                if (candidate != unwrapped && unwrapped.isChildOf(candidate) &&
-                    static_cast<int>(candidate.canonical.z) > bestZoom) {
-                    bestZoom = candidate.canonical.z;
-                    ancestorID = &candidate;
-                    ancestorEntry = &entry;
-                    demTexture = entry.texture;
+            UnwrappedTileID ancestorFound(0, {0, 0, 0});
+            for (int zz = static_cast<int>(unwrapped.canonical.z) - 1; zz >= 0; --zz) {
+                const UnwrappedTileID cand(unwrapped.wrap, unwrapped.canonical.scaledTo(static_cast<uint8_t>(zz)));
+                if (auto itA = demTextures.find(cand); itA != demTextures.end()) {
+                    ancestorFound = cand;
+                    ancestorID = &ancestorFound;
+                    ancestorEntry = &itA->second;
+                    demTexture = itA->second.texture;
+                    break;
                 }
             }
             if (!demTexture) {
@@ -710,6 +798,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             const auto exMap = drawableMapCoords.find(tileID);
             const float existingMapScale = exMap != drawableMapCoords.end() ? exMap->second[0] : 1.0f;
             if (existing->second >= demTier && (!basemapSource || existingMapScale >= mapCoords[0])) {
+                drawableEpoch[tileID] = bindingsEpoch; // rien de mieux disponible À CETTE époque
                 ++s_drawn;
                 continue;
             }
@@ -738,9 +827,11 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             }
             if (swapped) {
                 existing->second = demTier;
+                drawableEpoch[tileID] = bindingsEpoch;
                 ++s_drawn;
                 continue;
             }
+            drawableEpoch.erase(tileID);
             // État incohérent (drawable introuvable) → retomber sur la recréation classique.
             lg->removeDrawablesIf(
                 [&](gfx::Drawable& drawable) { return drawable.getTileID() && *drawable.getTileID() == tileID; });
@@ -768,12 +859,98 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             ++s_drawn;
             lg->addDrawable(std::move(drawable));
             tilesWithDrawables[tileID] = demTier;
+            drawableEpoch[tileID] = bindingsEpoch;
             if (depthLg) {
                 if (auto depthDrawable = createDrawableForTile(
                         context, shaders, tileID, demTexture, nullptr, /*depthPass=*/true)) {
                     depthLg->addDrawable(std::move(depthDrawable));
                 }
             }
+        }
+    }
+    // Retrait des drawables SORTIS du cover, seulement quand leur zone est RE-COUVERTE :
+    //  - un ancêtre (ou la tuile d'un cover plus grossier) présent AVEC drawable la recouvre, ou
+    //  - TOUS les descendants du cover qui la pavent ont leur drawable.
+    // Sinon on la garde une frame de plus (mieux un ancien contenu qu'un trou). Chevauchement
+    // parent/enfants possible quelques frames : terrain opaque, artefact mineur et transitoire.
+    {
+        std::vector<OverscaledTileID> removable;
+        for (const auto& entry : tilesWithDrawables) {
+            const OverscaledTileID& tid = entry.first;
+            if (currentTiles.contains(tid)) {
+                continue;
+            }
+            const UnwrappedTileID tuw = tid.toUnwrapped();
+            bool covered = false;
+            for (int zz = static_cast<int>(tuw.canonical.z) - 1; zz >= 0 && !covered; --zz) {
+                const CanonicalTileID anc = tuw.canonical.scaledTo(static_cast<uint8_t>(zz));
+                const OverscaledTileID ancId(anc.z, tuw.wrap, anc);
+                covered = currentTiles.contains(ancId) && tilesWithDrawables.contains(ancId);
+            }
+            if (!covered) {
+                bool any = false;
+                bool all = true;
+                for (const auto& id : meshTiles) {
+                    if (id.canonical.z > tuw.canonical.z && id.wrap == tuw.wrap &&
+                        id.canonical.scaledTo(tuw.canonical.z) == tuw.canonical) {
+                        any = true;
+                        if (!tilesWithDrawables.contains(OverscaledTileID(id.canonical.z, id.wrap, id.canonical))) {
+                            all = false;
+                            break;
+                        }
+                    }
+                }
+                covered = any && all;
+            }
+            if (covered) {
+                removable.push_back(tid);
+            }
+        }
+        if (!removable.empty()) {
+            const std::unordered_set<OverscaledTileID> removableSet(removable.begin(), removable.end());
+            lg->removeDrawablesIf([&](gfx::Drawable& drawable) {
+                return drawable.getTileID() && removableSet.contains(*drawable.getTileID());
+            });
+            if (depthLg) {
+                depthLg->removeDrawablesIf([&](gfx::Drawable& drawable) {
+                    return drawable.getTileID() && removableSet.contains(*drawable.getTileID());
+                });
+            }
+            for (const auto& tid : removable) {
+                drawableDemCoords.erase(tid);
+                drawableMapCoords.erase(tid);
+                tilesWithDrawables.erase(tid);
+                drawableEpoch.erase(tid);
+            }
+        }
+    }
+    if (isomapsBudgetOut) {
+        orchestrator.isomapsRequestRepaint(); // créations reportées → garantir une frame de continuation
+    }
+    // ⏱ Isomaps DIAG fluidité (à retirer) : pics de la mise à jour maillage, agrégé 1 s.
+    {
+        const double meshMs = (util::MonotonicTimer::now().count() - isomapsMeshT0) * 1000.0;
+        static double s_lastMeshLog = 0.0;
+        static int s_meshSpikes = 0;
+        static double s_meshWorst = 0.0;
+        static int s_meshWorstDrawn = 0;
+        if (meshMs > 4.0) {
+            s_meshSpikes++;
+            if (meshMs > s_meshWorst) {
+                s_meshWorst = meshMs;
+                s_meshWorstDrawn = s_drawn;
+            }
+        }
+        const double nowMesh = util::MonotonicTimer::now().count();
+        if (s_meshSpikes > 0 && nowMesh - s_lastMeshLog > 1.0) {
+            Log::Warning(Event::Render,
+                         "⏱ MESH ×" + std::to_string(s_meshSpikes) + " pire=" +
+                             std::to_string(static_cast<int>(s_meshWorst)) + "ms dessinés=" +
+                             std::to_string(s_meshWorstDrawn));
+            s_meshSpikes = 0;
+            s_meshWorst = 0.0;
+            s_meshWorstDrawn = 0;
+            s_lastMeshLog = nowMesh;
         }
     }
 }
