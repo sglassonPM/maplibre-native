@@ -786,7 +786,7 @@ void Transform::renormalizeCenterAltitudeToTerrain() {
     // complet à chaque flip = clignotement + deux covers superposés entrelacés par la profondeur).
     // La première intersection est unique et stable par construction.
     const LatLng eyeLL = loc->location;
-    double hitGround = -1.0;
+    double hitT = -1.0;
     constexpr int kRaySteps = 96;
     for (int i = 1; i <= kRaySteps; ++i) {
         const double t = 0.05 + (2.5 - 0.05) * (static_cast<double>(i) / kRaySteps);
@@ -798,19 +798,30 @@ void Transform::renormalizeCenterAltitudeToTerrain() {
                        eyeLL.longitude() + (c.longitude() - eyeLL.longitude()) * t);
         const auto g = terrainCollisionElevationFn(p);
         if (g && *g > 1.0 && *g >= rayAlt) {
-            hitGround = *g;
+            hitT = t;
             break;
         }
     }
-    if (hitGround < 0.0) {
+    if (hitT < 0.0) {
         return; // pas d'intersection trouvée (ciel/terrain inconnu) → paramétrisation courante conservée
     }
-    // Paroi au ras de l'œil (rayon qui frôle une crête proche) : ne pas dégénérer (e1→0, zoom 20+) —
-    // relever l'œil est le rôle de l'anti-collision, pas du zoom.
-    if (hitGround > eyeAlt - 150.0) {
+    // Cible = ALTITUDE DU RAYON au paramètre d'impact — PAS l'altitude du sol touché. En visée quasi
+    // horizontale (crête à hauteur d'œil mais à des kilomètres), « même altitude » ≠ « même endroit » :
+    // viser l'altitude du sol téléportait le centre à quelques mètres de l'œil (mesuré : crête 2 m sous
+    // l'œil à 3 km → zoom 22, échelle « 2 m », LOD dégénéré). Avec l'altitude du rayon à t_hit, le
+    // glissement homothétique (s = e1/e0 = t_hit) place le centre PILE au point d'impact, œil
+    // strictement fixe.
+    const double h1ray = eyeAlt + (h0 - eyeAlt) * hitT;
+    // Impact trop proche de l'œil (en 3D) : ne pas dégénérer — relever l'œil est le rôle de
+    // l'anti-collision, pas du zoom. Distance 3D ≈ t_hit × |œil→centre|.
+    const double cosLatR = std::cos(eyeLL.latitude() * M_PI / 180.0);
+    const double dxm = (c.longitude() - eyeLL.longitude()) * 111320.0 * cosLatR;
+    const double dym = (c.latitude() - eyeLL.latitude()) * 111320.0;
+    const double L0 = std::sqrt(dxm * dxm + dym * dym + (eyeAlt - h0) * (eyeAlt - h0));
+    if (hitT * L0 < 150.0) {
         return;
     }
-    const std::optional<double> ground = hitGround;
+    const std::optional<double> ground = h1ray;
     // Convergence : SAUT INSTANTANÉ pour les grands écarts — la reparamétrisation préserve la vue (œil
     // fixe), donc aucun à-coup visuel possible. Lisser les grands deltas (ex. lancement : sol 0 → 2400 m
     // pendant que le DEM s'affine) faisait BALAYER le zoom (14.8→17.1 sur plusieurs secondes) → chaque
@@ -830,6 +841,15 @@ void Transform::renormalizeCenterAltitudeToTerrain() {
     const double zoomNew = state.getZoom() + std::log2(e0 / e1);
     if (zoomNew < state.getMinZoom() || zoomNew > state.getMaxZoom()) {
         return; // un clamp déplacerait l'œil → on ne renormalise pas dans les bornes extrêmes
+    }
+    // ZONE MORTE : en panotant sur du relief accidenté, le rayon central balaie crête/vallée et la cible
+    // saute de ±1000 m à chaque micro-geste → sans seuil, CHAQUE relâché reparamétrait le zoom de ±0,5-1
+    // → re-cover complet de la pyramide (mesuré : maillage 57↔177, satellite en churn, « dès que je bouge
+    // un micro, ça se dégrade »). On ne reparamètre qu'au-delà de 0,5 zoom d'écart (AGL faux d'au plus
+    // ×1,4 entre deux resynchronisations — imperceptible sur la vitesse des gestes) ; les grands écarts
+    // (survol d'une falaise, lancement) passent toujours en saut instantané.
+    if (std::abs(zoomNew - state.getZoom()) < 0.5) {
+        return;
     }
     const double s = e1 / e0;
     const LatLng c1(eyeLL.latitude() + (c.latitude() - eyeLL.latitude()) * s,
@@ -992,6 +1012,21 @@ void Transform::clampEyeAboveTerrain() {
         const double ratio = std::min(1.25, (rayLen - hit3D + terrainCollisionMinAGL) / rayLen);
         if (ratio > 1.005) {
             wantAboveCenter = std::max(wantAboveCenter, eyeAboveCenter * ratio);
+        }
+    }
+    // Isomaps BUTÉE DE CONTACT : ANGLE MORT de la sonde de paroi (elle démarre à 75 m → les derniers mètres
+    // d'un pinch vers une face passaient sous tous les radars : le « sol sous l'œil » ne voit que la vallée
+    // en contrebas — mesuré : œil à 2 m du terrain du centre, zoom épinglé à 22, LOD dégénéré, « je
+    // n'arrive plus à zoomer »). La distance 3D œil→TERRAIN DU CENTRE est connue exactement (centerAltitude
+    // = impact du raycast de renormalisation) : sous minAGL, recul proportionnel (même mécanique bornée
+    // ×1,25/tick que la butée paroi — fige sans rebond).
+    if (eyeAboveCenter > 0.5 && centerAlt > 1.0) {
+        const double rayLen3D = std::sqrt(distEC * distEC + eyeAboveCenter * eyeAboveCenter);
+        if (rayLen3D > 0.1 && rayLen3D < terrainCollisionMinAGL) {
+            const double ratio = std::min(1.25, terrainCollisionMinAGL / rayLen3D);
+            if (ratio > 1.005) {
+                wantAboveCenter = std::max(wantAboveCenter, eyeAboveCenter * ratio);
+            }
         }
     }
     // Isomaps : pendant un geste qui AUGMENTE le pitch, une violation se résout en BORNANT LE PITCH
