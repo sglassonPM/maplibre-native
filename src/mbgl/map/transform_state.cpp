@@ -1052,7 +1052,11 @@ void TransformState::setCenterAltitude(double alt_m) {
     // paramétrisation AGL (plan de dé-projection du pan à 57 km → « 3 mm par geste », œil
     // catapulté, renormalisation auto-bloquée car œil − centre < 0 → le poison persiste).
     // Les gardes amont tracent leurs chemins ; ce verrou garantit l'état quel que soit le chemin.
-    if (!(alt_m >= -600.0 && alt_m <= 10000.0)) { // !( ) : rejette aussi NaN
+    // Plafond 10 500 : le fournisseur d'élévation borne le DEM à 9 500 m AVANT exagération
+    // (×1,1 → 10 450 possible en surface RENDUE). Un plafond à 10 000 refusait en boucle des
+    // valeurs légitimes du provider (10 143 constaté au relancement) → zoom/plan figés, carte
+    // « qui bouge à peine ». Les plafonds état/gardes doivent TOUJOURS ≥ clamp provider × exag.
+    if (!(alt_m >= -600.0 && alt_m <= 10500.0)) { // !( ) : rejette aussi NaN
         static int s_rejects = 0;
         if ((s_rejects++ % 60) == 0) {
             Log::Warning(Event::Render, "🛑 setCenterAltitude REFUSÉ alt=" + util::toString(alt_m));

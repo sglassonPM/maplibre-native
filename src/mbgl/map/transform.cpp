@@ -870,7 +870,7 @@ void Transform::renormalizeCenterAltitudeToTerrain() {
     const double e1 = eyeAlt - h1;
     // Isomaps GUÉRISON : si h0 (état) est aberrant (poison historique — plan à 57 km, pan « 3 mm »),
     // ne PAS s'auto-bloquer sur e0 <= 0 : resynchroniser directement l'état sur la cible saine h1.
-    if ((h0 > 10000.0 || h0 < -600.0) && h1 <= 10000.0 && h1 >= -600.0 && e1 > 1.0) {
+    if ((h0 > 10500.0 || h0 < -600.0) && h1 <= 10500.0 && h1 >= -600.0 && e1 > 1.0) {
         Log::Warning(Event::Render,
                      "🛑 renorm GUÉRISON h0=" + util::toString(h0) + " → h1=" + util::toString(h1));
         state.setCenterAltitude(h1);
@@ -899,7 +899,7 @@ void Transform::renormalizeCenterAltitudeToTerrain() {
     // fantôme fige toute la paramétrisation AGL — zoom calé sur un plateau imaginaire à 12 km, pan
     // « doigt collé » à 20-40 m/s (mesuré : centreAlt 11 867, œil catapulté à 12 142). On TRACE (pour
     // identifier le chemin fautif) et on REFUSE la renormalisation ce tick.
-    if (h1 > 10000.0) {
+    if (h1 > 10500.0) { // 10 500 : clamp provider 9 500 × exagération (cf. setCenterAltitude)
         Log::Warning(Event::Render,
                      "🛑 renorm fantôme h1=" + util::toString(h1) + " œil=" + util::toString(eyeAlt) +
                          " h0=" + util::toString(h0) + " hitT=" + util::toString(hitT) +
@@ -1051,7 +1051,7 @@ void Transform::clampEyeAboveTerrain() {
     // (terrain hors frustum, inconnu) : on garde la sécurité anti-plongée le temps que la sonde retrouve le sol.
     // GARDE (paire de celle de la renormalisation) : aucune surface terrestre > ~10 000 m — un sol de
     // référence fantôme catapulte l'œil (plancher AGL calé sur un plateau imaginaire). Trace + rejet.
-    if (refGround && *refGround > 10000.0) {
+    if (refGround && *refGround > 10500.0) {
         Log::Warning(Event::Render, "🛑 collision fantôme refGround=" + util::toString(*refGround));
         refGround = std::nullopt;
     }
