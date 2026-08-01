@@ -76,6 +76,7 @@ struct FragmentStage {
                      // SEULES jupes profondes (frontieres de LOD ~43 m) : un ombrage constant noircissait le
                      // liseré de ~11 m present le long de CHAQUE bord a pitch 0 → quadrillage sombre.
     float tileZoom;  // Isomaps DIAG : zoom canonique de la tuile (map_coords.w, rempli par le tweaker)
+    float satUp;     // Isomaps DIAG : ancestralite du satellite lie = -log2(map_coords.x) (0 = exact)
 };
 
 FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
@@ -174,6 +175,7 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         .fogStart  = drawable.fog_params.w,
         .skirt     = ele_delta, // profondeur de jupe (m), 0 hors jupe
         .tileZoom  = drawable.map_coords.w,
+        .satUp     = -log2(max(drawable.map_coords.x, 0.0000001)),
     };
 }
 
@@ -221,6 +223,23 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
         else                zc = half3(0.90, 0.20, 0.90);
         rgb = mix(rgb, zc, half(0.40));
         // Contour de tuile (uv local proche d'un bord) — liseré sombre.
+        const float2 dedge = min(in.tileUV, 1.0 - in.tileUV);
+        if (min(dedge.x, dedge.y) < 0.006) rgb = half3(0.05, 0.05, 0.05);
+    }
+#endif
+
+    // Isomaps DIAG — ORIGINE DU FLOU : teinte par ANCESTRALITÉ du satellite lié (in.satUp).
+    // Pas de teinte = texture EXACTE (une zone floue non teintée = décision LOD trop grossière) ;
+    // jaune = ancêtre −1, orange = −2, rouge = −3 ou pire (zone floue teintée = liaison/chargement).
+    // Liseré sombre = bord de tuile (taille du maillage lisible). Repasser à #if 0 après usage.
+#if 1
+    {
+        half3 zc = half3(0.0, 0.0, 0.0);
+        float m = 0.0;
+        if (in.satUp > 2.5)      { zc = half3(1.00, 0.10, 0.10); m = 0.45; }
+        else if (in.satUp > 1.5) { zc = half3(1.00, 0.55, 0.10); m = 0.45; }
+        else if (in.satUp > 0.5) { zc = half3(1.00, 0.90, 0.10); m = 0.40; }
+        rgb = mix(rgb, zc, half(m));
         const float2 dedge = min(in.tileUV, 1.0 - in.tileUV);
         if (min(dedge.x, dedge.y) < 0.006) rgb = half3(0.05, 0.05, 0.05);
     }

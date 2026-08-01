@@ -480,6 +480,7 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
 @property (nonatomic) MBXState *currentState;
 @property (weak, nonatomic) IBOutlet UIButton *hudLabel;
 @property (nonatomic, strong) UILabel *isomapsPitchLabel;
+@property (nonatomic, strong) UILabel *isomapsSpeedLabel; // Isomaps DIAG : vitesses sol (réglage gestes)
 @property (nonatomic) BOOL isomapsInitialCameraApplied; // Isomaps : ne poser la caméra qu'une fois (1er style)
 @property (nonatomic, strong) UIImageView *isomapsLogoView;
 @property (weak, nonatomic) IBOutlet MBXFrameTimeGraphView *frameTimeGraphView;
@@ -3339,12 +3340,56 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
         ]];
         self.isomapsPitchLabel = lbl;
 
+        // Isomaps DIAG — vitesses de déplacement PAR RAPPORT AU SOL (réglage de la vitesse des gestes
+        // près du sol) : vitesse horizontale du centre (m/s), vitesse verticale de l'œil (m/s) et
+        // échelle au centre (m/pt). Zone posée juste au-dessus de la zone pitch/œil.
+        UILabel *spd = [[UILabel alloc] init];
+        spd.font = [UIFont monospacedDigitSystemFontOfSize:15 weight:UIFontWeightBold];
+        spd.adjustsFontSizeToFitWidth = YES;
+        spd.minimumScaleFactor = 0.6;
+        spd.textColor = [UIColor whiteColor];
+        spd.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.55];
+        spd.textAlignment = NSTextAlignmentCenter;
+        spd.layer.cornerRadius = 8;
+        spd.clipsToBounds = YES;
+        spd.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.view addSubview:spd];
+        [NSLayoutConstraint activateConstraints:@[
+            [spd.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+            [spd.bottomAnchor constraintEqualToAnchor:lbl.topAnchor constant:-4],
+            [spd.widthAnchor constraintEqualToConstant:300],
+            [spd.heightAnchor constraintEqualToConstant:34],
+        ]];
+        self.isomapsSpeedLabel = spd;
+
         // 🧪 Isomaps DIAG (à retirer) — rafraîchit pitch + compte de tuiles en direct (4×/s), car ni
         // regionDidChange ni le HUD ne se déclenchent quand les tuiles se chargent à caméra immobile.
         __weak MBXViewController *weakSelf = self;
         [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(NSTimer *t) {
             MBXViewController *s = weakSelf;
             if (!s) { [t invalidate]; return; }
+            // Vitesses sol : delta du centre carte (haversine) et delta d'AGL entre deux ticks.
+            static CLLocationCoordinate2D prevCenter = {0, 0};
+            static double prevAGL = 0;
+            static CFTimeInterval prevTs = 0;
+            const CFTimeInterval nowTs = CACurrentMediaTime();
+            const CLLocationCoordinate2D ctr = s.mapView.centerCoordinate;
+            const double agl = [s.mapView isomapsEyeAltitudeAGL];
+            double groundSpeed = 0, verticalSpeed = 0;
+            const double dt = nowTs - prevTs;
+            if (prevTs > 0 && dt > 0.01) {
+                CLLocation *a = [[CLLocation alloc] initWithLatitude:prevCenter.latitude
+                                                           longitude:prevCenter.longitude];
+                CLLocation *b = [[CLLocation alloc] initWithLatitude:ctr.latitude longitude:ctr.longitude];
+                groundSpeed = [b distanceFromLocation:a] / dt;
+                verticalSpeed = (agl - prevAGL) / dt;
+            }
+            prevCenter = ctr;
+            prevAGL = agl;
+            prevTs = nowTs;
+            const double mPerPt = [s.mapView metersPerPointAtLatitude:ctr.latitude];
+            s.isomapsSpeedLabel.text = [NSString
+                stringWithFormat:@"sol %.0f m/s · vert %+.0f m/s · %.2f m/pt", groundSpeed, verticalSpeed, mPerPt];
             // 🧠 Empreinte mémoire réelle du process (phys_footprint = ce que Jetsam compte).
             task_vm_info_data_t vmInfo;
             mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
