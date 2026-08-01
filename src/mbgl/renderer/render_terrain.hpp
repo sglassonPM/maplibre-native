@@ -403,6 +403,8 @@ public:
     // Isomaps : true si une source basemap est désignée → le raster est échantillonné directement sur
     // le maillage, et renderer_impl NE crée PAS de cibles de drapage (gros gain mémoire/fluidité).
     bool hasDirectBasemap() const { return basemapSource != nullptr; }
+    /// Isomaps : id de la source basemap échantillonnée sur le maillage ("" si drapage complet).
+    std::string isomapsBasemapSourceID() const;
 
 private:
 

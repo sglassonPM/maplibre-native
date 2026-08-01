@@ -24,6 +24,8 @@
 
 #include <mbgl/gfx/drawable_tweaker.hpp>
 #include <mbgl/renderer/layer_tweaker.hpp>
+#include <mbgl/renderer/render_layer.hpp>
+#include <mbgl/style/layer_impl.hpp>
 #include <mbgl/renderer/render_target.hpp>
 #include <mbgl/renderer/render_terrain.hpp>
 #include <mbgl/renderer/layers/terrain_layer_tweaker.hpp>
@@ -254,6 +256,24 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
         // Cibles OVERLAY créées UNIQUEMENT pour les tuiles du maillage chevauchées par du contenu
         // vectoriel réel (coût borné par la géométrie), fond TRANSPARENT, imagerie de base exclue ;
         // composées par-dessus le satellite dans le fragment du shader terrain (texture 2).
+        // Isomaps RASTERS SECONDAIRES : seuls le background et le raster de LA basemap restent
+        // « base imagery ». Les autres rasters du style (pentes, météo…) doivent DRAPER comme le
+        // vectoriel — sans ça ils n'ont AUCUN chemin de rendu en mode basemap direct (constaté :
+        // calque pentes invisible sur satellite). Reclassement à CHAQUE frame : le flag est posé
+        // à la création du layer group, qui ne connaît pas la basemap.
+        const std::string isomapsBasemapSrc = terrain2->isomapsBasemapSourceID();
+        orchestrator.visitLayerGroups([&](LayerGroupBase& layerGroup) {
+            if (!layerGroup.isBaseImagery()) {
+                return;
+            }
+            if (const RenderLayer* rl = orchestrator.getRenderLayer(layerGroup.getName())) {
+                const std::string& src = rl->baseImpl->source;
+                if (!src.empty() && src != isomapsBasemapSrc) {
+                    layerGroup.setBaseImagery(false); // raster secondaire → drapé
+                }
+            }
+        });
+
         std::set<UnwrappedTileID> drapedContent;
         orchestrator.visitLayerGroups([&](LayerGroupBase& layerGroup) {
             if (layerGroup.getType() != LayerGroupBase::Type::TileLayerGroup ||

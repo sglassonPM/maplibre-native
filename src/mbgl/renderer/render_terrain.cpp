@@ -59,6 +59,10 @@ extern "C" long long isomapsDebugDemBytes() { return g_isomapsDemBytes.load(std:
 
 namespace mbgl {
 
+std::string RenderTerrain::isomapsBasemapSourceID() const {
+    return basemapSource ? basemapSource->baseImpl->id : std::string();
+}
+
 namespace {
 
 // Scale and x/y offset mapping a child tile's local space into the (possibly
