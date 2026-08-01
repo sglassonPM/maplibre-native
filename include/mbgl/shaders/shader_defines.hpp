@@ -309,6 +309,7 @@ enum {
 
 enum {
     idCircleDEMTexture,
+    idCircleDepthTexture, // Isomaps : pack profondeur terrain (occlusion des circles)
     circleTextureCount
 };
 

@@ -69,7 +69,7 @@ struct ShaderSource<BuiltIn::CircleShader, gfx::Backend::Type::Metal> {
 
     static const std::array<AttributeInfo, 8> attributes;
     static constexpr std::array<AttributeInfo, 0> instanceAttributes{};
-    static const std::array<TextureInfo, 1> textures;
+    static const std::array<TextureInfo, 2> textures;
 
     static constexpr auto prelude = circleShaderPrelude;
     static constexpr auto source = R"(
@@ -104,6 +104,7 @@ struct FragmentStage {
     float4 position [[position, invariant]];
     float2 extrude;
     float antialiasblur;
+    half vis; // Isomaps : occlusion par le relief (0 = caché derrière une crête)
 
 #if !defined(HAS_UNIFORM_u_color)
     half4 color;
@@ -134,7 +135,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
                                 device const CircleDrawableUBO* drawableVector [[buffer(idCircleDrawableUBO)]],
                                 device const CircleEvaluatedPropsUBO& props [[buffer(idCircleEvaluatedPropsUBO)]],
                                 texture2d<float, access::sample> demTexture [[texture(0)]],
-                                sampler demSampler [[sampler(0)]]) {
+                                sampler demSampler [[sampler(0)]],
+                                texture2d<float, access::sample> depthTexture [[texture(1)]],
+                                sampler depthSampler [[sampler(1)]]) {
 
     device const CircleDrawableUBO& drawable = drawableVector[uboIndex];
 
@@ -192,10 +195,20 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     // to keep the blur at roughly 1px, the two are inversely related.
     const half antialiasblur = 1.0 / DEVICE_PIXEL_RATIO / (radius + stroke_width);
 
+    // Isomaps OCCLUSION par le relief (même mécanique que les symboles) : le CENTRE du cercle,
+    // surélevé de +40 m (DEM vectoriel lissé vs surface fine), est testé contre le pack de
+    // profondeur terrain — un point d'eau derrière une crête disparaît. dem_enabled = 0 (pas de
+    // terrain) => vis = 1, inactif.
+    const float4 isomapsVisPoint = drawable.matrix * float4(circle_center, ele, 1) +
+                                   drawable.matrix * float4(0.0, 0.0, 40.0, 0.0);
+    const half isomapsVis = half(
+        calculate_visibility(isomapsVisPoint, depthTexture, depthSampler, drawable.dem_enabled));
+
     return {
         .position       = position,
         .extrude        = extrude,
         .antialiasblur  = antialiasblur,
+        .vis            = isomapsVis,
 
 #if !defined(HAS_UNIFORM_u_color)
         .color          = half4(unpack_mix_color(vertx.color, drawable.color_t)),
@@ -269,7 +282,7 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     const float color_t = (stroke_width < 0.01) ? 0.0 :
         smoothstep(antialiased_blur, 0.0, extrude_length - radius / (radius + stroke_width));
 
-    return half4(opacity_t * mix(color * opacity, stroke_color * stroke_opacity, color_t));
+    return half4(in.vis * opacity_t * mix(color * opacity, stroke_color * stroke_opacity, color_t));
 }
 )";
 };

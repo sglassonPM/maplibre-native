@@ -174,11 +174,11 @@ void RenderCircleLayer::update(gfx::ShaderRegistry& shaders,
 
     // Set up a layer group
     if (!layerGroup) {
-        // Isomaps : renderToTerrain = TRUE — les circles DRAPENT sur le relief comme lignes/fills.
-        // À false ils rendaient en passe principale sans test contre le terrain → points d'eau
-        // visibles À TRAVERS les montagnes en 3D (constaté). Drapés, ils sont occlus naturellement
-        // (peints sur la surface) ; sans terrain, aucun changement (drapage inactif).
-        if (auto layerGroup_ = context.createTileLayerGroup(layerIndex, /*initialCapacity=*/64, getID(), true)) {
+        // Isomaps : les circles restent en PASSE PRINCIPALE (renderToTerrain=false — le drapage a
+        // été essayé et abandonné : leur matrice perspective dans la cible ortho donnait un plan
+        // vertical). L'occlusion par le relief se fait dans le shader (calculate_visibility, comme
+        // les symboles) : cf. circle_layer_tweaker (texture profondeur) + mtl/circle.hpp.
+        if (auto layerGroup_ = context.createTileLayerGroup(layerIndex, /*initialCapacity=*/64, getID(), false)) {
             setLayerGroup(std::move(layerGroup_), changes);
         } else {
             return;

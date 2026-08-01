@@ -99,6 +99,8 @@ void CircleLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
             drawable.setTexture(
                 terrainData ? terrainData->demTexture : parameters.terrain->getPlaceholderDEMTexture(context),
                 idCircleDEMTexture);
+            // Isomaps : pack de profondeur terrain pour l'occlusion (calculate_visibility).
+            drawable.setTexture(parameters.terrain->getDepthTexture(context), idCircleDepthTexture);
         }
 
         // The terrain surface writes depth (so its skirts get occluded); circles
