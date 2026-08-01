@@ -2365,8 +2365,16 @@ public:
 
   self.cameraChangeReasonBitmask |= MLNCameraChangeReasonGesturePinch;
 
+  // Isomaps : pinch INCRÉMENTAL depuis le zoom RÉEL. L'amont visait une cible ABSOLUE depuis le début du
+  // geste (self.scale × pinch.scale) : pendant que la butée terrain FIGE le zoom contre une paroi, la
+  // cible continue d'accumuler ; au passage de la crête, l'événement suivant applique tout le retard d'un
+  // coup → bond violent (« au sommet de la paroi, on bascule derrière, ça va très vite »). En incrémental,
+  // chaque événement ajoute SON delta au zoom courant (post-butée) : la progression reste continue.
+  static double s_isomapsPrevPinchScale = 1.0;
+
   if (pinch.state == UIGestureRecognizerStateBegan) {
     self.scale = powf(2, [self zoomLevel]);
+    s_isomapsPrevPinchScale = 1.0;
 
     if (abs(pinch.velocity) > abs(self.rotate.velocity)) {
       self.isZooming = YES;
@@ -2374,8 +2382,10 @@ public:
     [self notifyGestureDidBegin];
   } else if (pinch.state == UIGestureRecognizerStateChanged) {
     // Zoom limiting happens at the core level.
-    CGFloat newScale = self.scale * pinch.scale;
-    double newZoom = log2(newScale);
+    double deltaZoom = log2(pinch.scale / s_isomapsPrevPinchScale);
+    s_isomapsPrevPinchScale = pinch.scale;
+    deltaZoom = MAX(-0.3, MIN(0.3, deltaZoom)); // ceinture : jamais de saut par événement
+    double newZoom = [self zoomLevel] + deltaZoom;
 
     // Calculates the final camera zoom, has no effect within current map camera.
     MLNMapCamera *toCamera = [self cameraByZoomingToZoomLevel:newZoom
@@ -2409,7 +2419,9 @@ public:
 
     NSTimeInterval duration = (velocity > 0 ? 1 : 0.25) * self.decelerationRate;
 
-    CGFloat scale = self.scale * pinch.scale;
+    // Isomaps : l'inertie part du zoom RÉEL (post-butée), pas de la cible absolue accumulée du geste —
+    // sinon le relâché appliquait d'un coup tout le retard retenu par la butée (même bond qu'au Changed).
+    CGFloat scale = powf(2, [self zoomLevel]);
     CGFloat newScale = scale;
     if (velocity >= 0) {
       newScale += scale * velocity * duration * 0.1;
