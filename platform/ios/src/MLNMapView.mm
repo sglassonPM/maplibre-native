@@ -2303,6 +2303,11 @@ public:
     // près du sol (mesuré : « beaucoup trop long » à zoom 18,8 pitch 0). Le facteur PITCH ci-dessous
     // reste (l'effet rasant, lui, est réel).
     CGFloat damping = 0.6;
+    // Isomaps — BOOST pres du sol : le pan ecran-vrai ralentit deja naturellement en approchant le
+    // relief, et l'amortissement plat 0,6 le rendait ~2x trop lent a fort zoom (demande : « au moins
+    // deux fois la vitesse actuelle »). Remontee progressive 0,6 -> 1,2 entre z14 et z17.
+    const CGFloat kZoomForBoost = (CGFloat)self.zoomLevel;
+    damping *= 1.0 + MAX(0.0, MIN(1.0, (kZoomForBoost - 14.0) / 3.0));
     // Isomaps — facteur PITCH : au-dela de ~40deg l'effet rasant fait avancer enormement (on balaie
     // beaucoup de terrain -> retrace massif de tuiles). On ralentit progressivement : 40deg->1.0,
     // 85deg->0.3 (l'avance devient confortable a fort pitch, sans depasser le chargement des tuiles).
