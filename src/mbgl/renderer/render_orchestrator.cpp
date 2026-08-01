@@ -257,6 +257,12 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
                                   renderTerrain->getElevationFinalized());
     }
     tileParameters.elevationProvider = terrainEnabled ? &*elevationProvider : nullptr;
+    // Isomaps : les sources satellite/DEM prennent le COVER DU MAILLAGE (frame précédente) comme
+    // demande idéale — 1:1 par construction, cf. tile_parameters.hpp. Vide au lancement → nullptr
+    // (les pyramides retombent sur leur propre cover pour amorcer le DEM).
+    tileParameters.isomapsMeshCover = (terrainEnabled && !renderTerrain->getLastRenderedMeshTiles().empty())
+                                          ? &renderTerrain->getLastRenderedMeshTiles()
+                                          : nullptr;
 
     const ImageDifference imageDiff = diffImages(imageImpls, updateParameters->images);
     imageImpls = updateParameters->images;

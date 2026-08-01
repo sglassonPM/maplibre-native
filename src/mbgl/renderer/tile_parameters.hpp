@@ -2,6 +2,9 @@
 
 #include <mbgl/map/mode.hpp>
 #include <mbgl/actor/scheduler.hpp>
+#include <mbgl/tile/tile_id.hpp>
+
+#include <set>
 
 #include <memory>
 #include <numbers>
@@ -47,6 +50,12 @@ public:
     /// Terrain elevation for the tile cover; null when there is no terrain, which
     /// leaves the cover flat. See util::TileElevationProvider.
     const util::TileElevationProvider* elevationProvider = nullptr;
+
+    /// Isomaps : cover du MAILLAGE terrain de la frame précédente. Quand il est présent, les sources
+    /// satellite/DEM le prennent comme demande idéale (correspondance 1:1 par construction) au lieu de
+    /// recalculer leur propre cover — deux covers « aux mêmes lois » divergeaient nœud à nœud (entrées
+    /// évaluées à des moments différents de la frame) → liaisons ancêtre −1 FIGÉES au repos (mesuré).
+    const std::set<UnwrappedTileID>* isomapsMeshCover = nullptr;
 };
 
 } // namespace mbgl

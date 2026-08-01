@@ -199,13 +199,17 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
         transform.getPitch() > state.tileLodPitchThreshold || state.elevationProvider != nullptr;
     const uint8_t minZoom = allowVariableZoom ? zoomRange.min : z;
     uint8_t maxZoom = ((state.tileLodMode == TileLodMode::Distance) && allowVariableZoom) ? zoomRange.max : z;
-    // Isomaps : PLAFOND DE DRAPAGE. Le LOD AGL par-tuile peut pousser des sommets proches de l'œil bien
-    // au-delà du zoom nominal (au dézoom : z17 demandé à idealZoom 13 → ~200 tuiles satellite, 2,5 Go),
-    // alors que le maillage terrain — borné par son baseZoom (≈ z+2) — ne drape qu'UNE texture par tuile de
-    // maillage : plus fin est inutilisable. Borne : jamais plus fin que z+2 (= ceil(zoom)+1 ; préserve le
-    // z18 net validé à zoom 17). Masqué jusqu'ici par le frustum écrasé en Z qui culled ces tuiles à tort.
-    if (state.elevationProvider && maxZoom > z + 2) {
-        maxZoom = static_cast<uint8_t>(z + 2);
+    // Isomaps : PLAFOND DE ZOOM NOMINAL — le zoom carte est le « cadran » de détail de l'utilisateur,
+    // et il est AGL-VRAI chez nous : se rapprocher du sol le monte automatiquement, donc le détail suit
+    // l'approche. C'était le rôle du plafond « z + 2 » du temps où la graine ≈ zoom carte ; la graine
+    // passée à 18 fixe l'avait neutralisé → à zoom 12,6 pitché, le champ proche montait à z17-18 →
+    // 301 tuiles / satTex 1,2 Go / footprint 3,3 Go → JETSAM AU LANCEMENT (mesuré). ceil(zoom)+2
+    // préserve le z18 net validé à zoom 17,8 et le gain tileLodScale 0,6 (z16 à zoom 13,85).
+    if (state.elevationProvider) {
+        const double nominalCap = std::ceil(transform.getZoom()) + 2.0;
+        if (static_cast<double>(maxZoom) > nominalCap) {
+            maxZoom = static_cast<uint8_t>(std::max(0.0, nominalCap));
+        }
     }
     // Isomaps : RÉFÉRENCE SOL STABLE pour le LOD terrain = altitude du terrain SOUS LA CAMÉRA (une seule
     // valeur). Elle sert à mesurer les distances tuile→caméra en AGL (hauteur au-dessus du SOL, cf. bloc LOD
@@ -422,7 +426,19 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
             // le zoom atteignable par la distance — mais en distance AGL (déjà mesurée ci-dessus, boîte élevée
             // à la réf sol), donc correct en montagne (le proche reste net, le lointain retombe → compte borné).
             if (state.elevationProvider) {
-                const double tileDistMaxZoom = -std::log2(std::max(1e-9, distanceToTileMercator)) - 4.4;
+                // BUDGET EN ESPACE ÉCRAN, invariant à la graine : plafond(d) = zoom_carte +
+                // log2(dist_œil→centre / d) + 1. Ancré au ZOOM CARTE (le cadran, AGL-vrai) et gradué
+                // par la distance — une tuile 2× plus proche que le centre a droit à +1 niveau.
+                // Historique : la forme −log2(distanceToTileMercator)−4,4 dépendait de la GRAINE
+                // (unités-tuile à 2^z contre worldSize en pixels) — quand la graine est passée à 18
+                // fixe, elle s'est effondrée de 6 niveaux à haute altitude (maillage=4, tout flou),
+                // et son premier remplacement « fraction du monde +4,6 » (calibré régime rapproché)
+                // était ~3 niveaux trop généreux à mi-distance (z15:148 à zoom 12,6 → satTex 828 Mo,
+                // 2,4 Go au lancement, mesuré). La forme écran reproduit les trois régimes validés :
+                // z16 proche/z13 centre/z10 loin à Nyon zoom 12,6 · z18 alpin zoom 17,8 · z12 à 58 km.
+                const double camCenterTiles = std::max(1e-9, vec3Length(vec3Sub(cameraCoord, centerCoord)));
+                const double dTiles = std::max(1e-9, vec3Length(camToTileTiles));
+                const double tileDistMaxZoom = transform.getZoom() + std::log2(camCenterTiles / dTiles) + 1.0;
                 if (static_cast<double>(node.zoom) + 1.0 > tileDistMaxZoom) shouldSplitTile = false;
                 // PLAFONDS ALIGNÉS SUR LA BRUME (soupape mémoire assumée, façon Mapbox) : au-delà de
                 // ~20/40/80 km le rendu est voilé à ~15/50/85 % (fogStart 8 km + 47 km, cf. shader

@@ -231,8 +231,8 @@ half4 fragment fragmentMain(FragmentStage in [[stage_in]],
     // Isomaps DIAG — ORIGINE DU FLOU : teinte par ANCESTRALITÉ du satellite lié (in.satUp).
     // Pas de teinte = texture EXACTE (une zone floue non teintée = décision LOD trop grossière) ;
     // jaune = ancêtre −1, orange = −2, rouge = −3 ou pire (zone floue teintée = liaison/chargement).
-    // Liseré sombre = bord de tuile (taille du maillage lisible). Repasser à #if 0 après usage.
-#if 1
+    // Liseré sombre = bord de tuile (taille du maillage lisible). Repasser à #if 1 pour débugger.
+#if 0
     {
         half3 zc = half3(0.0, 0.0, 0.0);
         float m = 0.0;

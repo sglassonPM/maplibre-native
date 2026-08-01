@@ -136,6 +136,19 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
             tileZoom = idealZoom;
         }
 
+        // Isomaps : SOURCES DU TERRAIN 3D (satellite basemap + DEM) — MÊME GRAINE que le cover du
+        // MAILLAGE. idealZoom venait du ZOOM CARTE (coveringZoomLevel, avec pénalité −1 pour les tuiles
+        // 512) alors que le maillage couvre avec z = maxzoom source et laisse le LOD Distance borner
+        // par nœud (budget −4,4, plafonds brume, plancher <500 m). Écart mesuré : zoom carte ~14,
+        // maillage z17-18 au premier plan → satellite plafonné z15 (z+2 du drapage) → liaison ancêtre
+        // −3 À VIE (teinte DIAG rouge, PERSISTANTE au repos ; le DEM 256, un cran mieux loti, traînait
+        // ses dem1). Même graine ⇒ mêmes lois ⇒ profondeurs identiques ⇒ liaisons exactes au repos.
+        if (parameters.tileLodMode == TileLodMode::Distance && parameters.elevationProvider &&
+            (type == SourceType::Raster || type == SourceType::RasterDEM)) {
+            idealZoom = zoomRange.max;
+            tileZoom = idealZoom;
+        }
+
         // Only attempt prefetching in continuous mode.
         if (parameters.mode == MapMode::Continuous && type != style::SourceType::GeoJSON &&
             type != style::SourceType::Annotations) {
@@ -161,6 +174,20 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
         }
 
         idealTiles = util::tileCover(tileCoverParameters, idealZoom, zoomRange, tileZoom);
+        // Isomaps : SOURCES DU TERRAIN 3D — la demande idéale devient le COVER DU MAILLAGE de la frame
+        // précédente (1:1 par construction). Deux covers « aux mêmes lois » divergeaient nœud à nœud
+        // (entrées évaluées à des moments différents de la frame, bornes différentes) → le maillage
+        // liait des ancêtres −1 À VIE au repos (satAnc1=29/41, dem1=17/41 figés, mesuré à Nyon).
+        // Le tileCover ci-dessus reste l'amorce (cover du maillage encore vide au lancement).
+        if (parameters.isomapsMeshCover && (type == SourceType::Raster || type == SourceType::RasterDEM)) {
+            idealTiles.clear();
+            idealTiles.reserve(parameters.isomapsMeshCover->size());
+            for (const auto& t : *parameters.isomapsMeshCover) {
+                if (t.canonical.z >= zoomRange.min && t.canonical.z <= zoomRange.max) {
+                    idealTiles.emplace_back(t.canonical.z, t.wrap, t.canonical);
+                }
+            }
+        }
         if (parameters.mode == MapMode::Tile && type != SourceType::Raster && type != SourceType::RasterDEM &&
             idealTiles.size() > 1) {
             mbgl::Log::Warning(mbgl::Event::General,

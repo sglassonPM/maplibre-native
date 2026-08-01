@@ -97,6 +97,14 @@ std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(const TransformState& 
                 baseZoom = std::max(baseZoom, renderTile.id.canonical.z);
                 minLoadedZoom = std::min(minLoadedZoom, renderTile.id.canonical.z);
             }
+            // Isomaps : la GRAINE du cover = MAXZOOM du DEM, plus « le DEM rendu le plus fin ». L'ancienne
+            // graine créait un ŒUF-POULE depuis que les sources suivent le cover du maillage 1:1 : maillage
+            // borné au DEM déjà chargé → sources ne demandent que le cover du maillage → DEM jamais plus fin
+            // → scène FIGÉE grossière après un rapprochement (mesuré : descente 10 km → 3 km au-dessus du
+            // Goûter, tout flou, zoom inchangé). Semer au maxzoom émet les tuiles fines dès que la DISTANCE
+            // les justifie ; la liaison DEM ancêtre (tier 1) couvre l'attente, et le LOD Distance (budget,
+            // brume, plancher proche) borne la profondeur réelle — la graine n'est plus un plafond subi.
+            baseZoom = std::max(baseZoom, demSource->getMaxZoom());
             demBaseZoom = baseZoom;
             StableElevationProvider elevationProvider(demSource, getExaggeration(), meshTileElevation, meshTileElevationFinal);
             // Meme seuil variable-zoom que les sources (abaisse a 0 dans map_impl) et cover borne.
@@ -543,7 +551,13 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                     ++satAnc[std::min(up, 4)];
                 }
             }
-            const std::string liaisons = " 🔗 dem2/1/0=" + util::toString(tier2) + "/" + util::toString(tier1) +
+            // Isomaps 🛰 DIAG : graine du cover maillage = tuile DEM RENDUE la plus fine (cf. computeMeshCover).
+            uint8_t meshSeed = 0;
+            for (const auto& rt : *demSource->getRawRenderTiles()) {
+                meshSeed = std::max(meshSeed, rt.id.canonical.z);
+            }
+            const std::string liaisons = " base=" + util::toString(static_cast<int>(meshSeed)) +
+                                         " 🔗 dem2/1/0=" + util::toString(tier2) + "/" + util::toString(tier1) +
                                          "/" + util::toString(tier0) + " satAnc0/1/2/3+=" +
                                          util::toString(satAnc[0]) + "/" + util::toString(satAnc[1]) + "/" +
                                          util::toString(satAnc[2]) + "/" + util::toString(satAnc[3] + satAnc[4]);
@@ -995,11 +1009,32 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                 ancOfDrawn.insert(OverscaledTileID(anc.z, tid.wrap, anc));
             }
         }
-        // « pleine » = a un drawable, ou ses 4 quadrants pleins. Récursion bornée aux ancêtres de tuiles
-        // dessinées (tout autre sous-arbre répond faux immédiatement) → O(dessinées × niveaux).
+        // Ancêtres du cover courant — sert au test « quadrant voulu par le cover » ci-dessous.
+        std::unordered_set<OverscaledTileID> ancOfCover;
+        for (const auto& tid : currentTiles) {
+            for (int zz = static_cast<int>(tid.canonical.z) - 1; zz >= 0; --zz) {
+                const CanonicalTileID anc = tid.canonical.scaledTo(static_cast<uint8_t>(zz));
+                ancOfCover.insert(OverscaledTileID(anc.z, tid.wrap, anc));
+            }
+        }
+        // « pleine » = a un drawable, ou HORS COVER (pavée par vacuité), ou ses 4 quadrants pleins.
+        // VACUITÉ : un quadrant que le cover ne demande pas (ni tuile, ni ancêtre, ni descendant dans le
+        // cover — typiquement hors frustum) ne peut pas révéler de trou VISIBLE si on masque son parent.
+        // Sans ce cas, un parent retenu dont un quadrant déborde de l'écran restait dessiné et perçait
+        // les enfants exacts par plages (mesuré : points rouges satAnc3+ au bord gauche, teinte DIAG).
+        // Récursion bornée aux ancêtres de tuiles dessinées → O(dessinées × niveaux).
         std::unordered_map<OverscaledTileID, bool> filledMemo;
+        const auto wantedByCover = [&](const OverscaledTileID& id) -> bool {
+            if (currentTiles.contains(id) || ancOfCover.contains(id)) return true;
+            for (int zz = static_cast<int>(id.canonical.z) - 1; zz >= 0; --zz) {
+                const CanonicalTileID anc = id.canonical.scaledTo(static_cast<uint8_t>(zz));
+                if (currentTiles.contains(OverscaledTileID(anc.z, id.wrap, anc))) return true;
+            }
+            return false;
+        };
         const std::function<bool(const OverscaledTileID&)> filled = [&](const OverscaledTileID& id) -> bool {
             if (tilesWithDrawables.contains(id)) return true;
+            if (!wantedByCover(id)) return true; // hors cover (hors champ) : plein par vacuité
             if (id.canonical.z >= maxDrawnZ || !ancOfDrawn.contains(id)) return false;
             if (const auto it = filledMemo.find(id); it != filledMemo.end()) return it->second;
             bool all = true;
