@@ -887,6 +887,17 @@ void Transform::renormalizeCenterAltitudeToTerrain() {
     if (std::abs(zoomNew - state.getZoom()) < 0.5) {
         return;
     }
+    // GARDE : aucune surface terrestre au-dessus de ~10 000 m (Everest × exagération). Une cible
+    // fantôme fige toute la paramétrisation AGL — zoom calé sur un plateau imaginaire à 12 km, pan
+    // « doigt collé » à 20-40 m/s (mesuré : centreAlt 11 867, œil catapulté à 12 142). On TRACE (pour
+    // identifier le chemin fautif) et on REFUSE la renormalisation ce tick.
+    if (h1 > 10000.0) {
+        Log::Warning(Event::Render,
+                     "🛑 renorm fantôme h1=" + util::toString(h1) + " œil=" + util::toString(eyeAlt) +
+                         " h0=" + util::toString(h0) + " hitT=" + util::toString(hitT) +
+                         " h1ray=" + util::toString(h1ray));
+        return;
+    }
     const double s = e1 / e0;
     const LatLng c1(eyeLL.latitude() + (c.latitude() - eyeLL.latitude()) * s,
                     eyeLL.longitude() + (c.longitude() - eyeLL.longitude()) * s);
@@ -1010,6 +1021,12 @@ void Transform::clampEyeAboveTerrain() {
     // sinon l'œil reste bridé à la hauteur d'un sommet franchi (« figé trop haut » → à fort zoom la vue se
     // casse en un coin de terrain + fond magenta). LENTE (2 %/appel) seulement quand refGround est NUL
     // (terrain hors frustum, inconnu) : on garde la sécurité anti-plongée le temps que la sonde retrouve le sol.
+    // GARDE (paire de celle de la renormalisation) : aucune surface terrestre > ~10 000 m — un sol de
+    // référence fantôme catapulte l'œil (plancher AGL calé sur un plateau imaginaire). Trace + rejet.
+    if (refGround && *refGround > 10000.0) {
+        Log::Warning(Event::Render, "🛑 collision fantôme refGround=" + util::toString(*refGround));
+        refGround = std::nullopt;
+    }
     if (refGround && *refGround > collisionRefGroundHold) {
         collisionRefGroundHold = *refGround;
     }
