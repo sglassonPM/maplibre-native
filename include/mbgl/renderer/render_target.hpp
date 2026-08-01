@@ -50,6 +50,12 @@ public:
     void setDrapeTileID(const UnwrappedTileID& id);
     const std::optional<UnwrappedTileID>& getDrapeTileID() const { return drapeTileID; }
 
+    /// Isomaps : cible OVERLAY (basemap direct) — ne rend QUE le contenu vectoriel drapé, sur fond
+    /// transparent (les groupes d'imagerie de base sont exclus) ; composée par-dessus le satellite
+    /// échantillonné directement, dans le fragment du shader terrain (texture 2).
+    void setOverlayMode(bool value) { overlayMode = value; }
+    bool isOverlayMode() const { return overlayMode; }
+
     /// Refresh this drape target's copy of the global paint parameters,
     /// carrying the target tile in `drape_tile` (no-op for non-drape targets)
     void updateDrapeGlobalUBO(const shaders::GlobalPaintParamsUBO& params, gfx::Context& context);
@@ -141,6 +147,7 @@ protected:
     LayerGroupMap layerGroupsByLayerIndex;
     Color backgroundColor;
     std::optional<UnwrappedTileID> drapeTileID;
+    bool overlayMode = false; // Isomaps : cf. setOverlayMode()
     // (z, x including wrap, y, 1) of the drape tile, as consumed by
     // apply_drape_transform; w = 1 marks an active drape target
     std::array<float, 4> drapeTileValues{{0, 0, 0, 0}};

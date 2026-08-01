@@ -178,6 +178,18 @@ std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(const TransformState& 
                 }
             }
         }
+        // Isomaps GLOBE SANS DEM : sous le minzoom de la source DEM (6), la pyramide ne demande plus
+        // rien → base=0, maillage=0, ÉCRAN VIDE (mesuré à zoom 2,2). Repli ultime : cover PLAT au zoom
+        // nominal, maillé sur le DEM placeholder (tier 0) et drapé du satellite (les sources suivent ce
+        // cover). La rampe de pitch aplatit de toute façon la vue à ces zooms.
+        if (out.empty()) {
+            const auto flatZ = static_cast<uint8_t>(
+                util::clamp(std::ceil(state.getZoom()) + 1.0, 1.0, 8.0));
+            const util::TileCoverParameters flatParams{.transformState = state};
+            for (const auto& oid : util::tileCover(flatParams, flatZ, Range<uint8_t>(flatZ, flatZ))) {
+                out.insert(UnwrappedTileID(oid.wrap, oid.canonical));
+            }
+        }
     }
 
     // NB (Isomaps) : le « raffinement satellite » (+ expandToDeepestCover) est SUPPRIMÉ. Il datait de
@@ -1222,6 +1234,31 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             depthLg->visitDrawables(applyVisibility);
         }
     }
+    // ---- OVERLAY VECTORIEL (basemap direct) ---- : lie en texture 2 la cible overlay de la tuile
+    // (contenu vectoriel drapé sur fond transparent, cf. renderer_impl « drapage sélectif ») quand
+    // elle existe, sinon le 1×1 transparent (le fragment compose inconditionnellement — alpha 0 =
+    // no-op). Anti-rebind par pointeur (setTexture évité quand rien ne change).
+    if (basemapSource) {
+        const auto& transparent = getTransparentOverlayTexture(context);
+        if (overlayBound.size() > 4096) {
+            overlayBound.clear();
+        }
+        lg->visitDrawables([&](gfx::Drawable& drawable) {
+            if (!drawable.getTileID()) {
+                return;
+            }
+            std::shared_ptr<gfx::Texture2D> want = transparent;
+            if (const auto rt = texturePool.getRenderTarget(drawable.getTileID()->toUnwrapped())) {
+                want = rt->getTexture();
+            }
+            const void*& bound = overlayBound[*drawable.getTileID()];
+            if (bound != want.get()) {
+                drawable.setTexture(want, 2);
+                bound = want.get();
+            }
+        });
+    }
+
     // Isomaps 🕳 DIAG (paire de la sonde tile_cover, même interrupteur d'esprit) : côté RENDU — la
     // tuile du maillage contenant le CENTRE de l'écran a-t-elle un drawable DESSINÉ (présent ET non
     // masqué), et à quelle texture satellite est-elle liée ? Répond TOUJOURS (y compris « aucune
@@ -1409,6 +1446,19 @@ const std::shared_ptr<gfx::Texture2D>& RenderTerrain::getPlaceholderDEMTexture(g
                                                         .wrapV = gfx::TextureWrapType::Clamp});
     }
     return placeholderDEMTexture;
+}
+
+const std::shared_ptr<gfx::Texture2D>& RenderTerrain::getTransparentOverlayTexture(gfx::Context& context) {
+    if (!transparentOverlayTexture) {
+        auto image = std::make_shared<PremultipliedImage>(Size{1, 1});
+        std::memset(image->data.get(), 0, image->bytes()); // RGBA(0,0,0,0)
+        transparentOverlayTexture = context.createTexture2D();
+        transparentOverlayTexture->setImage(image);
+        transparentOverlayTexture->setSamplerConfiguration({.filter = gfx::TextureFilterType::Nearest,
+                                                            .wrapU = gfx::TextureWrapType::Clamp,
+                                                            .wrapV = gfx::TextureWrapType::Clamp});
+    }
+    return transparentOverlayTexture;
 }
 
 void RenderTerrain::renderDepth(RenderOrchestrator& orchestrator,
@@ -1743,6 +1793,9 @@ std::unique_ptr<gfx::Drawable> RenderTerrain::createDrawableForTile(gfx::Context
         } else {
             Log::Warning(Event::Render, "No drape texture for terrain tile " + util::toString(tileID));
         }
+        // Isomaps : OVERLAY vectoriel (texture 2) — transparent à la création ; la passe de liaison
+        // d'update() le remplace par la cible overlay de la tuile quand elle existe.
+        builder->setTexture(getTransparentOverlayTexture(context), 2);
     }
 
     // Flush to create the drawable

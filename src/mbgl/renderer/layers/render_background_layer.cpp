@@ -155,6 +155,7 @@ void RenderBackgroundLayer::update(gfx::ShaderRegistry& shaders,
 
     if (!layerGroup) {
         if (auto layerGroup_ = context.createTileLayerGroup(layerIndex, /*initialCapacity=*/64, getID(), true)) {
+            layerGroup_->setBaseImagery(true); // Isomaps : exclu des cibles overlay (basemap direct)
             setLayerGroup(std::move(layerGroup_), changes);
         } else {
             return;

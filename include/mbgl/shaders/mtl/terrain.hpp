@@ -56,7 +56,7 @@ struct ShaderSource<BuiltIn::TerrainShader, gfx::Backend::Type::Metal> {
 
     static const std::array<AttributeInfo, 1> attributes;
     static constexpr std::array<AttributeInfo, 0> instanceAttributes{};
-    static const std::array<TextureInfo, 2> textures;
+    static const std::array<TextureInfo, 3> textures;
 
     static constexpr auto prelude = terrainShaderPrelude;
     static constexpr auto source = R"(
@@ -182,11 +182,19 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
 half4 fragment fragmentMain(FragmentStage in [[stage_in]],
                             device const TerrainEvaluatedPropsUBO& props [[buffer(idTerrainEvaluatedPropsUBO)]],
                             texture2d<float, access::sample> mapTexture [[texture(1)]],
-                            sampler mapSampler [[sampler(1)]]) {
+                            sampler mapSampler [[sampler(1)]],
+                            texture2d<float, access::sample> drapeTexture [[texture(2)]],
+                            sampler drapeSampler [[sampler(2)]]) {
 #if defined(OVERDRAW_INSPECTOR)
     return half4(1.0);
 #endif
-    const float4 tex = mapTexture.sample(mapSampler, in.uv);
+    float4 tex = mapTexture.sample(mapSampler, in.uv);
+    // Isomaps OVERLAY vectoriel (basemap direct) : contenu drape de la tuile (trace GPX, lignes du
+    // style) rendu sur fond TRANSPARENT dans une cible dediee, compose ici PAR-DESSUS le satellite
+    // echantillonne directement. uv = tileUV (cible 1:1 de la tuile, pas de remap d'ancetre). Les
+    // tuiles sans contenu lient un 1x1 transparent -> no-op. La brume s'applique ensuite au tout.
+    const float4 drape = drapeTexture.sample(drapeSampler, in.tileUV);
+    tex.rgb = mix(tex.rgb, drape.rgb, drape.a);
 
     // Isomaps BRUME atmospherique (facon Mapbox) : net jusqu'a ~fogStart, dense vers ~fogEnd, plafonnee
     // a fogMax pour que les sommets lointains (100-120 km) restent des SILHOUETTES brumeuses, pas un mur

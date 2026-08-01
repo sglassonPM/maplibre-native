@@ -241,13 +241,49 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
         // du terrain tourne pendant la construction du RenderTree, donc AVANT ce render(), et
         // publie lastRenderedMeshTiles. Drapage et maillage sont ainsi strictement identiques
         // — ni tuile maillee sans imagerie (gris), ni imagerie sans maillage (gaspillage).
-        // Isomaps : SAUTÉ si basemap direct (hasDirectBasemap) → le raster est échantillonné
-        // directement sur le maillage, aucune cible offscreen nécessaire (gain mémoire/fluidité).
         const std::set<UnwrappedTileID>& demTileIDs = terrain->getLastRenderedMeshTiles();
         for (const auto& id : demTileIDs) {
             texturePool.createRenderTarget(context, id, renderTreeParameters.backgroundColor);
         }
         texturePool.removeStaleRenderTargets(demTileIDs);
+    } else if (auto* terrain2 = orchestrator.getRenderTerrain()) {
+        // Isomaps DRAPAGE SÉLECTIF (basemap direct) : le satellite est échantillonné directement sur
+        // le maillage (aucune cible par tuile pour l'imagerie), mais les couches VECTORIELLES drapées
+        // (trace GPX, lignes du style) ont besoin d'une cible pour exister en 3D — sans elle, elles ne
+        // rendent nulle part (mesuré : trace GPX invisible, coastlines idem depuis le mode direct).
+        // Cibles OVERLAY créées UNIQUEMENT pour les tuiles du maillage chevauchées par du contenu
+        // vectoriel réel (coût borné par la géométrie), fond TRANSPARENT, imagerie de base exclue ;
+        // composées par-dessus le satellite dans le fragment du shader terrain (texture 2).
+        std::set<UnwrappedTileID> drapedContent;
+        orchestrator.visitLayerGroups([&](LayerGroupBase& layerGroup) {
+            if (layerGroup.getType() != LayerGroupBase::Type::TileLayerGroup ||
+                !layerGroup.shouldRenderToTerrain() || layerGroup.isBaseImagery()) {
+                return;
+            }
+            static_cast<TileLayerGroup&>(layerGroup).visitDrawables([&](const gfx::Drawable& drawable) {
+                if (drawable.getEnabled() && drawable.getTileID()) {
+                    drapedContent.insert(drawable.getTileID()->toUnwrapped());
+                }
+            });
+        });
+        std::set<UnwrappedTileID> wanted;
+        if (!drapedContent.empty()) {
+            for (const auto& id : terrain2->getLastRenderedMeshTiles()) {
+                for (const auto& c : drapedContent) {
+                    if (c == id || c.isChildOf(id) || id.isChildOf(c)) {
+                        wanted.insert(id);
+                        break;
+                    }
+                }
+            }
+        }
+        for (const auto& id : wanted) {
+            texturePool.createRenderTarget(context, id, Color(0.0f, 0.0f, 0.0f, 0.0f));
+            if (const auto rt = texturePool.getRenderTarget(id)) {
+                rt->setOverlayMode(true);
+            }
+        }
+        texturePool.removeStaleRenderTargets(wanted);
     } else {
         // The pool persists across frames, so release the drape targets when
         // terrain is disabled instead of holding their textures indefinitely

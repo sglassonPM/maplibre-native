@@ -109,6 +109,11 @@ RenderTarget::DrapeCoverage RenderTarget::computeDrapeCoverage(RenderOrchestrato
         if (layerGroup.getType() != LayerGroupBase::Type::TileLayerGroup || !layerGroup.shouldRenderToTerrain()) {
             return;
         }
+        // Isomaps : en mode overlay, l'imagerie de base ne compte pas dans la couverture (même filtre
+        // qu'au rendu) — sinon son contenu piloterait des re-rendus pour rien.
+        if (overlayMode && layerGroup.isBaseImagery()) {
+            return;
+        }
         coverage.totalGroups++;
         bool haveExactOrDescendant = false;
         std::optional<UnwrappedTileID> bestAncestor;
@@ -151,6 +156,12 @@ void RenderTarget::renderDrapedLayerGroups(RenderOrchestrator& orchestrator, Pai
     const auto visitDrapedGroups = [&](auto&& visit, auto&& f) {
         visit([&](LayerGroupBase& layerGroup) {
             if (layerGroup.getType() == LayerGroupBase::Type::TileLayerGroup && layerGroup.shouldRenderToTerrain()) {
+                // Isomaps : cible OVERLAY (basemap direct) — le fond et le raster sont déjà rendus par
+                // l'échantillonnage direct du maillage ; n'y draper que le contenu VECTORIEL, sur fond
+                // transparent, sinon l'overlay opaque remplacerait le satellite.
+                if (overlayMode && layerGroup.isBaseImagery()) {
+                    return;
+                }
                 f(layerGroup);
             }
         });

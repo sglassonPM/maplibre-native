@@ -391,6 +391,7 @@ enum {
 enum {
     idTerrainDEMTexture,
     idTerrainMapTexture,
+    idTerrainDrapeTexture, // Isomaps : overlay vectoriel (basemap direct)
     terrainTextureCount
 };
 

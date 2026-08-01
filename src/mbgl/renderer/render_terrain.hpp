@@ -192,6 +192,9 @@ public:
      * so shaders that declare the DEM sampler always have a valid binding
      */
     const std::shared_ptr<gfx::Texture2D>& getPlaceholderDEMTexture(gfx::Context&);
+    /// Isomaps OVERLAY vectoriel (basemap direct) : 1×1 TRANSPARENT lié en texture 2 quand la tuile
+    /// n'a pas de cible overlay — le fragment compose inconditionnellement (alpha 0 = no-op).
+    const std::shared_ptr<gfx::Texture2D>& getTransparentOverlayTexture(gfx::Context&);
 
     /**
      * @brief Get the terrain implementation
@@ -428,6 +431,9 @@ private:
 
     // See getPlaceholderDEMTexture
     std::shared_ptr<gfx::Texture2D> placeholderDEMTexture;
+    // Isomaps : cf. getTransparentOverlayTexture ; overlayBound = dernier pointeur lié (anti-rebind)
+    std::shared_ptr<gfx::Texture2D> transparentOverlayTexture;
+    std::map<OverscaledTileID, const void*> overlayBound;
 
     // Layer index (terrain renders early in 3D pass, use negative index)
     static constexpr int32_t TERRAIN_LAYER_INDEX = -1000;

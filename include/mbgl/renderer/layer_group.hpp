@@ -113,6 +113,12 @@ public:
 
     bool shouldRenderToTerrain() { return renderToTerrain; }
 
+    /// Isomaps : groupe d'IMAGERIE DE BASE (background, raster) — exclu des cibles de drapage en mode
+    /// « overlay » (basemap direct : le satellite est déjà échantillonné par le maillage ; l'overlay ne
+    /// doit contenir QUE le contenu vectoriel, sur fond transparent, composé par-dessus).
+    void setBaseImagery(bool value) { baseImagery = value; }
+    bool isBaseImagery() const { return baseImagery; }
+
     /// Set observer
     void setObserver(gfx::ContextObserver* observer_) { observer = observer_ ? observer_ : &gfx::nullObserver; }
 
@@ -123,6 +129,7 @@ protected:
     std::vector<LayerTweakerWeakPtr> layerTweakers;
     std::string name;
     bool renderToTerrain;
+    bool baseImagery = false; // Isomaps : cf. isBaseImagery()
     gfx::ContextObserver* observer;
 };
 
