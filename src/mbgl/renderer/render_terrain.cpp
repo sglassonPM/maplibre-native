@@ -931,15 +931,16 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     //  - TOUS les descendants du cover qui la pavent ont leur drawable.
     // Sinon on la garde une frame de plus (mieux un ancien contenu qu'un trou). Chevauchement
     // parent/enfants possible quelques frames : terrain opaque, artefact mineur et transitoire.
+    // Finesse EFFECTIVE du satellite affiché par une tuile : zoom canonique + log2(map_coords[0])
+    // (1.0 = exact, 0.5 = ancêtre −1…). Sert à ne jamais RÉGRESSER en netteté — au retrait (garde) ET
+    // au dessin (netteté-au-zoom v2 : enfants en retard masqués, cf. bloc anti-entrelacs).
+    const auto effSatZoom = [&](const OverscaledTileID& id) -> double {
+        const auto mc = drawableMapCoords.find(id);
+        if (mc == drawableMapCoords.end()) return -1.0;
+        return static_cast<double>(id.canonical.z) +
+               std::log2(std::max(1e-6, static_cast<double>(mc->second[0])));
+    };
     {
-        // Finesse EFFECTIVE du satellite affiché par une tuile : zoom canonique + log2(map_coords[0])
-        // (1.0 = exact, 0.5 = ancêtre −1…). Sert à ne jamais RÉGRESSER en netteté lors d'un retrait.
-        const auto effSatZoom = [&](const OverscaledTileID& id) -> double {
-            const auto mc = drawableMapCoords.find(id);
-            if (mc == drawableMapCoords.end()) return -1.0;
-            return static_cast<double>(id.canonical.z) +
-                   std::log2(std::max(1e-6, static_cast<double>(mc->second[0])));
-        };
         std::vector<OverscaledTileID> removable;
         for (const auto& entry : tilesWithDrawables) {
             const OverscaledTileID& tid = entry.first;
@@ -975,7 +976,16 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                     if (id.canonical.z > tuw.canonical.z && id.wrap == tuw.wrap &&
                         id.canonical.scaledTo(tuw.canonical.z) == tuw.canonical) {
                         any = true;
-                        if (!tilesWithDrawables.contains(OverscaledTileID(id.canonical.z, id.wrap, id.canonical))) {
+                        const OverscaledTileID did(id.canonical.z, id.wrap, id.canonical);
+                        if (!tilesWithDrawables.contains(did)) {
+                            all = false;
+                            break;
+                        }
+                        // NETTETÉ-AU-ZOOM v2 : au zoom AVANT, le parent net était retiré dès que les
+                        // enfants EXISTAIENT — même liés à un satellite d'ancêtre flou → « zoomer rend
+                        // plus flou » (mesuré). On attend que chaque descendant soit AU MOINS aussi net
+                        // que le parent (progressif : l'arrivée de chaque satellite fait son chemin).
+                        if (basemapSource && effSatZoom(did) + 0.01 < effSatZoom(tid)) {
                             all = false;
                             break;
                         }
@@ -1135,9 +1145,30 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             }
             return false;
         };
+        // NETTETÉ-AU-ZOOM v2 : un drawable dont la netteté effective est EN RETARD sur celle d'un
+        // ancêtre encore dessiné est MASQUÉ — le biais de profondeur par niveau ferait gagner l'enfant
+        // FLOU sur le parent net retenu (« zoomer rend plus flou », mesuré). Chaque enfant réapparaît
+        // individuellement dès que son satellite atteint la netteté du parent. Le parent, lui, est
+        // retenu par la garde du retrait (même critère) → jamais de trou.
+        std::unordered_set<OverscaledTileID> childHidden;
+        if (basemapSource) {
+            for (const auto& [tid, tier] : tilesWithDrawables) {
+                const double eff = effSatZoom(tid);
+                for (int zz = static_cast<int>(tid.canonical.z) - 1; zz >= 0; --zz) {
+                    const CanonicalTileID anc = tid.canonical.scaledTo(static_cast<uint8_t>(zz));
+                    const OverscaledTileID ancId(anc.z, tid.wrap, anc);
+                    if (tilesWithDrawables.contains(ancId) && effSatZoom(ancId) > eff + 0.01) {
+                        childHidden.insert(tid);
+                        break;
+                    }
+                }
+            }
+        }
         std::set<UnwrappedTileID> vacuousLeaves; // quadrants « vacants » du tid en cours d'évaluation
         const std::function<bool(const OverscaledTileID&)> filled = [&](const OverscaledTileID& id) -> bool {
-            if (tilesWithDrawables.contains(id)) return true;
+            // Un enfant MASQUÉ (netteté en retard) ne pave pas : sinon son parent — précisément retenu
+            // pour couvrir à sa place — serait masqué au-dessus d'enfants masqués → trou.
+            if (tilesWithDrawables.contains(id) && !childHidden.contains(id)) return true;
             if (!wantedByCover(id)) {
                 vacuousLeaves.insert(id.toUnwrapped()); // vacuité À CONFIRMER par le frustum
                 return true;
@@ -1180,6 +1211,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             }
             if (all) hidden.insert(tid);
         }
+        hidden.insert(childHidden.begin(), childHidden.end());
         const auto applyVisibility = [&](gfx::Drawable& drawable) {
             if (drawable.getTileID()) {
                 drawable.setEnabled(!hidden.contains(*drawable.getTileID()));
