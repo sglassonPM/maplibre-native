@@ -175,6 +175,12 @@ private:
     // mémorisé et TIENT jusqu'à la fin du geste (fige net). Sans lui, la limite recalculée à chaque tick
     // suit le bruit de la sonde terrain (pas de 75 m, maintien décroissant) → pitch qui tremble.
     double gesturePitchCeiling = std::numeric_limits<double>::infinity();
+    // Isomaps : CLIQUET de zoom pendant un geste — quand la butée (paroi/contact) corrige le zoom en plein
+    // pinch, le plafond tient jusqu'à la fin du geste. Sans lui, le plancher « sol sous l'œil » SOULÈVE
+    // l'œil par-dessus la crête visée, la visée bascule sur le terrain derrière et le zoom repart →
+    // franchissement involontaire (mesuré : « je visais le refuge du Goûter, j'ai dépassé la crête »).
+    // Relâcher puis re-pincer réévalue : le franchissement reste possible, mais VOLONTAIRE.
+    double gestureZoomCeiling = std::numeric_limits<double>::infinity();
     // Mémoire d'élévation : le terrain sous l'œil est souvent hors frustum (non chargé → requête = 0). On
     // retient le MAX vu par cellule spatiale (~100 m) quand il ÉTAIT chargé (à l'écran) ; on le ressort en
     // secours quand la requête live échoue → tout relief approché récemment protège l'œil (le sol est fixe).

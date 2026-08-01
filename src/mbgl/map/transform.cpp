@@ -787,6 +787,8 @@ void Transform::renormalizeCenterAltitudeToTerrain() {
     // La première intersection est unique et stable par construction.
     const LatLng eyeLL = loc->location;
     double hitT = -1.0;
+    double grazeT = -1.0;      // crête FRÔLÉE : passage du rayon à < 150 m au-dessus du terrain
+    double grazeGap = 150.0;   // plus petit dégagement rencontré (m)
     constexpr int kRaySteps = 96;
     for (int i = 1; i <= kRaySteps; ++i) {
         const double t = 0.05 + (2.5 - 0.05) * (static_cast<double>(i) / kRaySteps);
@@ -797,10 +799,26 @@ void Transform::renormalizeCenterAltitudeToTerrain() {
         const LatLng p(eyeLL.latitude() + (c.latitude() - eyeLL.latitude()) * t,
                        eyeLL.longitude() + (c.longitude() - eyeLL.longitude()) * t);
         const auto g = terrainCollisionElevationFn(p);
-        if (g && *g > 1.0 && *g >= rayAlt) {
+        if (!g || *g <= 1.0) {
+            continue;
+        }
+        if (*g >= rayAlt) {
             hitT = t;
             break;
         }
+        // Dégagement faible = le rayon FRÔLE une crête. « Viser une crête n'est pas évident » : le rayon
+        // passe quelques mètres au-dessus, la première intersection est le terrain DERRIÈRE → toute la
+        // sémantique (renorm, zoom, butée) cible derrière → on franchit le col malgré soi (mesuré,
+        // refuge du Goûter). Le premier frôlement devient la cible : zoomer amène À la crête, la butée
+        // de contact et le cliquet s'y accrochent ; franchir = relâcher et re-pincer.
+        const double gap = rayAlt - *g;
+        if (gap < grazeGap && grazeT < 0.0) {
+            grazeGap = gap;
+            grazeT = t;
+        }
+    }
+    if (grazeT > 0.0 && (hitT < 0.0 || grazeT < hitT)) {
+        hitT = grazeT;
     }
     if (hitT < 0.0) {
         return; // pas d'intersection trouvée (ciel/terrain inconnu) → paramétrisation courante conservée
@@ -1038,6 +1056,12 @@ void Transform::clampEyeAboveTerrain() {
     const bool gestureActive = isGestureInProgress();
     if (!gestureActive) {
         gesturePitchCeiling = std::numeric_limits<double>::infinity(); // fin de geste : cliquet relâché
+        gestureZoomCeiling = std::numeric_limits<double>::infinity();
+    } else if (state.getZoom() > gestureZoomCeiling + 1e-6) {
+        // CLIQUET DE ZOOM (cf. header) : la butée a déjà figé ce geste — le pinch incrémental ne peut
+        // plus avancer, même si le plancher sous-l'œil a soulevé la caméra par-dessus l'obstacle.
+        state.setLatLngZoom(state.getLatLng(), gestureZoomCeiling);
+        return;
     } else if (pitchNow > gesturePitchCeiling) {
         // CLIQUET : la limite touchée plus tôt dans CE geste tient — fige net, aucun recalcul (le bruit de
         // la sonde ne fait plus trembler le pitch). Réévaluation complète au prochain tick.
@@ -1066,6 +1090,11 @@ void Transform::clampEyeAboveTerrain() {
         const double appliedZoom = util::clamp(state.getZoom() + dz, state.getMinZoom(), state.getMaxZoom());
         if (std::abs(appliedZoom - state.getZoom()) > 0.001) {
             state.setLatLngZoom(state.getLatLng(), appliedZoom);
+            if (gestureActive) {
+                // ARME le cliquet : la butée a corrigé ce geste → le zoom ne repartira pas au-delà tant
+                // que les doigts n'ont pas été relâchés (franchir une crête redevient un choix explicite).
+                gestureZoomCeiling = std::min(gestureZoomCeiling, appliedZoom);
+            }
         }
     }
 }
