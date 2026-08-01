@@ -321,6 +321,13 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
                     terrainTweaker->execute(*depthLayerGroup, parameters);
                 }
             }
+            // Isomaps : sous-couche anti-fissures — son tweaker porte l'enfoncement et lit les
+            // liaisons dédiées (cf. TerrainLayerTweaker(sinkMeters)).
+            if (auto* undercoatTweaker = terrain->getUndercoatTweaker()) {
+                if (const auto& undercoatLayerGroup = terrain->getUndercoatLayerGroup()) {
+                    undercoatTweaker->execute(*undercoatLayerGroup, parameters);
+                }
+            }
         }
 
         parameters.currentLayer = 0;

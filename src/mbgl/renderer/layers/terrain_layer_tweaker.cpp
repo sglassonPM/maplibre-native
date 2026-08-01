@@ -102,6 +102,13 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
         // Calculate transformation matrix for this terrain tile
         // This uses the same matrix calculation as other layers
         mat4 matrix = parameters.matrixForTile(tileID);
+        // Isomaps SOUS-COUCHE : enfoncement FRANC sous la surface (translation d'élévation, l'espace
+        // tuile porte l'altitude en mètres exagérés en z). PAR TUILE : proportionnel au relief (un DEM
+        // grossier lissé peut se trouver des centaines de mètres au-dessus du fond des vallées).
+        // Jamais quasi-coplanaire → jamais d'entrelacs ; visible uniquement à travers les fissures.
+        if (sinkMeters != 0.0) {
+            matrix::translate(matrix, matrix, 0.0, 0.0, -terrain->getUndercoatSinkMeters(*drawable.getTileID()));
+        }
 
         // Isomaps BRUME : exprime la camera dans le repere local (0..8192) de CETTE tuile + metres/unite.
         const double fogN = static_cast<double>(1ull << tileID.canonical.z);
@@ -120,11 +127,15 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
         const TerrainDrawableUBO drawableUBO = {
 #endif
             .matrix = util::cast<float>(matrix),
-            .dem_coords = terrain->getDrawableDemCoords(*drawable.getTileID()),
-            .edge_dz = terrain->getDrawableEdgeDz(*drawable.getTileID()),
+            .dem_coords = sinkMeters != 0.0 ? terrain->getUndercoatDemCoords(*drawable.getTileID())
+                                            : terrain->getDrawableDemCoords(*drawable.getTileID()),
+            // Sous-couche : pas de raccord d'arêtes (nappe enfouie, les marches y sont invisibles).
+            .edge_dz = sinkMeters != 0.0 ? std::array<float, 4>{{0.0f, 0.0f, 0.0f, 0.0f}}
+                                         : terrain->getDrawableEdgeDz(*drawable.getTileID()),
             .map_coords =
                 [&] {
-                    auto mc = terrain->getDrawableMapCoords(*drawable.getTileID());
+                    auto mc = sinkMeters != 0.0 ? terrain->getUndercoatMapCoords(*drawable.getTileID())
+                                                : terrain->getDrawableMapCoords(*drawable.getTileID());
                     mc[3] = static_cast<float>(tileID.canonical.z); // DIAG LOD : zoom tuile (slot libre)
                     return mc;
                 }(),

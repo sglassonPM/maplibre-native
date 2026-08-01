@@ -23,8 +23,13 @@ using UniformBufferPtr = std::shared_ptr<UniformBuffer>;
  */
 class TerrainLayerTweaker : util::noncopyable {
 public:
-    explicit TerrainLayerTweaker(const RenderTerrain* terrain_)
-        : terrain(terrain_) {}
+    /// Isomaps : sinkMeters > 0 = mode SOUS-COUCHE anti-fissures (« terrain-under ») — la nappe est
+    /// enfoncée de sinkMeters (translation d'élévation dans la matrice, mètres exagérés) et les
+    /// liaisons DEM/satellite sont lues dans les cartes DÉDIÉES de la sous-couche (ids partagés avec
+    /// la surface → cartes séparées obligatoires).
+    explicit TerrainLayerTweaker(const RenderTerrain* terrain_, double sinkMeters_ = 0.0)
+        : terrain(terrain_),
+          sinkMeters(sinkMeters_) {}
 
     ~TerrainLayerTweaker() = default;
 
@@ -36,6 +41,7 @@ protected:
 #endif
 
     const RenderTerrain* terrain = nullptr;
+    double sinkMeters = 0.0;
 };
 
 } // namespace mbgl

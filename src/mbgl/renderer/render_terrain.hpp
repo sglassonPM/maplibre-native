@@ -243,6 +243,32 @@ public:
      */
     TerrainLayerTweaker* getTweaker() const { return tweaker.get(); }
 
+    // Isomaps SOUS-COUCHE anti-fissures (« terrain-under ») : nappe grossière (z ≤ kUndercoatMaxZ)
+    // enfoncée de kUndercoatSinkMeters sous la surface — visible uniquement à travers les fissures
+    // (frontières de LOD, transitions). Groupe/tweaker/liaisons DISTINCTS : hors passe anti-entrelacs,
+    // hors jumeau de profondeur, et ids partagés avec la surface → cartes de liaisons séparées.
+    const LayerGroupBasePtr& getUndercoatLayerGroup() const { return undercoatLayerGroup; }
+    TerrainLayerTweaker* getUndercoatTweaker() const { return undercoatTweaker.get(); }
+    std::array<float, 4> getUndercoatDemCoords(const OverscaledTileID& tileID) const {
+        const auto it = undercoatDemCoords.find(tileID);
+        return it != undercoatDemCoords.end()
+                   ? it->second
+                   : std::array<float, 4>{{1.0f / util::EXTENT, 0.0f, 0.0f, static_cast<float>(demDim)}};
+    }
+    std::array<float, 4> getUndercoatMapCoords(const OverscaledTileID& tileID) const {
+        const auto it = undercoatMapCoords.find(tileID);
+        return it != undercoatMapCoords.end() ? it->second : std::array<float, 4>{{1.0f, 0.0f, 0.0f, 0.0f}};
+    }
+    /// Enfoncement PAR TUILE (mètres exagérés) : base + 0,6 × amplitude d'élévation de la tuile — un
+    /// DEM grossier lissé MOYENNE crêtes et vallées, donc au fond des gorges il se trouve des centaines
+    /// de mètres AU-DESSUS du vrai terrain (mesuré : nappes vertes « semi-transparentes » dans les
+    /// vallées avec un enfoncement fixe de 150 m). La couleur vue à travers une fissure fine ne dépend
+    /// pas de la profondeur → enfoncer largement ne coûte rien.
+    double getUndercoatSinkMeters(const OverscaledTileID& tileID) const {
+        const auto it = undercoatSink.find(tileID);
+        return it != undercoatSink.end() ? it->second : kUndercoatSinkMeters;
+    }
+
     // Immutable terrain configuration
     Immutable<style::Terrain::Impl> impl;
 
@@ -265,6 +291,15 @@ private:
 
     // Layer group for terrain drawables
     LayerGroupBasePtr layerGroup;
+
+    // Isomaps SOUS-COUCHE anti-fissures — cf. getUndercoatLayerGroup()
+    static constexpr uint8_t kUndercoatMaxZ = 10;        // granularité de la nappe (poignée de tuiles)
+    static constexpr double kUndercoatSinkMeters = 150;  // > erreur de lissage d'un DEM z10 en face raide
+    LayerGroupBasePtr undercoatLayerGroup;
+    std::unique_ptr<TerrainLayerTweaker> undercoatTweaker;
+    std::map<OverscaledTileID, std::array<float, 4>> undercoatDemCoords;
+    std::map<OverscaledTileID, std::array<float, 4>> undercoatMapCoords;
+    std::map<OverscaledTileID, double> undercoatSink; // enfoncement par tuile, cf. getUndercoatSinkMeters
 
     // Layer group and viewport-sized target for the terrain depth pass
     LayerGroupBasePtr depthLayerGroup;

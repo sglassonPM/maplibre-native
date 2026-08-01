@@ -424,6 +424,18 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         depthLayerGroup = context.createLayerGroup(TERRAIN_LAYER_INDEX, /*initialCapacity=*/1, "terrain-depth", false);
     }
 
+    // Isomaps SOUS-COUCHE anti-fissures : groupe + tweaker dédiés (enfoncement kUndercoatSinkMeters).
+    // Activée dans l'orchestrateur comme la surface — l'ordre de dessin est indifférent (profondeur).
+    if (!undercoatLayerGroup) {
+        if (auto ug = context.createLayerGroup(TERRAIN_LAYER_INDEX, /*initialCapacity=*/1, "terrain-under", false)) {
+            undercoatLayerGroup = std::move(ug);
+            changes.emplace_back(std::make_unique<AddLayerGroupRequest>(undercoatLayerGroup));
+        }
+    }
+    if (!undercoatTweaker) {
+        undercoatTweaker = std::make_unique<TerrainLayerTweaker>(this, kUndercoatSinkMeters);
+    }
+
     // Create tweaker if we don't have one
     if (!tweaker) {
         tweaker = std::make_unique<TerrainLayerTweaker>(this);
@@ -1000,6 +1012,87 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             }
         }
     }
+    // ---- SOUS-COUCHE ANTI-FISSURES ---- : nappe grossière enfoncée sous la surface. Cycle de vie
+    // TRIVIAL par conception : ensemble désiré = ancêtres z<=kUndercoatMaxZ du cover du maillage
+    // (poignée de tuiles), recalculé chaque frame ; pas de rétention (la nappe est invisible hors
+    // fissures) ; liaisons re-résolues chaque frame (coût négligeable à ~4-10 tuiles).
+    if (undercoatLayerGroup && basemapSource) {
+        auto* ulg = static_cast<LayerGroup*>(undercoatLayerGroup.get());
+        StableElevationProvider undercoatElevation(
+            demSource, getExaggeration(), meshTileElevation, meshTileElevationFinal);
+        std::set<OverscaledTileID> wanted;
+        for (const auto& id : meshTiles) {
+            const uint8_t uz = std::min<uint8_t>(id.canonical.z, kUndercoatMaxZ);
+            const CanonicalTileID anc = id.canonical.scaledTo(uz);
+            wanted.insert(OverscaledTileID(anc.z, id.wrap, anc));
+        }
+        for (const auto& tid : wanted) {
+            // Enfoncement par tuile : base + 0,6 × amplitude (cf. getUndercoatSinkMeters).
+            double sink = kUndercoatSinkMeters;
+            if (const auto r = undercoatElevation.getTileElevationRange(tid.canonical)) {
+                sink += 0.6 * std::max(0.0, r->max - r->min);
+            }
+            undercoatSink[tid] = sink;
+            const UnwrappedTileID uw = tid.toUnwrapped();
+            // DEM : propre, sinon ancêtre le plus fin (les filets z7/z10 garantissent un repli décent).
+            std::shared_ptr<gfx::Texture2D> demTexture;
+            std::array<float, 4> demCoords{{1.0f / util::EXTENT, 0.0f, 0.0f, static_cast<float>(demDim)}};
+            if (const auto own = demTextures.find(uw); own != demTextures.end()) {
+                demTexture = own->second.texture;
+            } else {
+                for (int zz = static_cast<int>(uw.canonical.z) - 1; zz >= 0; --zz) {
+                    const UnwrappedTileID cand(uw.wrap, uw.canonical.scaledTo(static_cast<uint8_t>(zz)));
+                    if (const auto itA = demTextures.find(cand); itA != demTextures.end()) {
+                        demTexture = itA->second.texture;
+                        const auto off = demSubTileOffset(uw.canonical, cand.canonical);
+                        demCoords = {{1.0f / (util::EXTENT * off.scale),
+                                      off.dx / off.scale,
+                                      off.dy / off.scale,
+                                      static_cast<float>(demDim)}};
+                        break;
+                    }
+                }
+            }
+            if (!demTexture) {
+                demTexture = getPlaceholderDEMTexture(context);
+            }
+            std::array<float, 4> mapCoords{{1.0f, 0.0f, 0.0f, 0.0f}};
+            auto mapTexture = getBasemapTextureForTile(uw, mapCoords);
+            if (!demTexture || !mapTexture) {
+                continue;
+            }
+            if (undercoatDemCoords.contains(tid)) {
+                // Rebind en place (textures + coords relus par le tweaker à chaque frame).
+                ulg->visitDrawables([&](gfx::Drawable& d) {
+                    if (d.getTileID() && *d.getTileID() == tid) {
+                        d.setTexture(demTexture, 0);
+                        d.setTexture(mapTexture, 1);
+                    }
+                });
+            } else if (auto drawable = createDrawableForTile(context, shaders, tid, demTexture, mapTexture)) {
+                ulg->addDrawable(std::move(drawable));
+            } else {
+                continue;
+            }
+            undercoatDemCoords[tid] = demCoords;
+            undercoatMapCoords[tid] = mapCoords;
+        }
+        // Retraits : tout ce qui n'est plus désiré part immédiatement (aucun trou possible — la
+        // surface au-dessus couvre, la nappe n'est qu'un filet de secours).
+        ulg->removeDrawablesIf([&](gfx::Drawable& drawable) {
+            return drawable.getTileID() && !wanted.contains(*drawable.getTileID());
+        });
+        for (auto it = undercoatDemCoords.begin(); it != undercoatDemCoords.end();) {
+            if (!wanted.contains(it->first)) {
+                undercoatMapCoords.erase(it->first);
+                undercoatSink.erase(it->first);
+                it = undercoatDemCoords.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     // ANTI-ENTRELACS : ne jamais DESSINER deux surfaces pour la même zone. Pendant les transitions
     // (zoom, retrait différé au re-couvrement, garde de netteté), parent et enfants coexistent
     // volontairement ; leurs maillages (DEM lissé vs DEM fin) diffèrent de quelques mètres → le test de
@@ -1612,6 +1705,15 @@ void RenderTerrain::activateLayerGroup(bool activate, UniqueChangeRequestVec& ch
             changes.emplace_back(std::make_unique<AddLayerGroupRequest>(layerGroup));
         } else {
             changes.emplace_back(std::make_unique<RemoveLayerGroupRequest>(layerGroup));
+        }
+    }
+    // Isomaps : la sous-couche suit le sort de la surface (créée plus tard dans update(), mais
+    // désactivée/réactivée ici avec elle).
+    if (undercoatLayerGroup) {
+        if (activate) {
+            changes.emplace_back(std::make_unique<AddLayerGroupRequest>(undercoatLayerGroup));
+        } else {
+            changes.emplace_back(std::make_unique<RemoveLayerGroupRequest>(undercoatLayerGroup));
         }
     }
 }

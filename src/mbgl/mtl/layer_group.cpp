@@ -89,10 +89,11 @@ void LayerGroup::render(RenderOrchestrator&, PaintParameters& parameters) {
             tweaker->execute(drawable, parameters);
         }
 
-        // Restreint au groupe « terrain » (surface principale) : le jumeau « terrain-depth » rend dans sa
+        // Restreint aux groupes « terrain » (surface principale) et « terrain-under » (sous-couche
+        // anti-fissures, même convention reversed-Z) : le jumeau « terrain-depth » rend dans sa
         // propre cible (pack de profondeur en COULEUR, pas de remap reversed-Z, pas d'attache depth) —
         // lui imposer cet état serait incorrect (et invalide côté Metal sans attache de profondeur).
-        if (drawable.getIs3D() && getName() == "terrain") {
+        if (drawable.getIs3D() && (getName() == "terrain" || getName() == "terrain-under")) {
             renderPass.setDepthStencilState(getState3D(drawable.getEnableDepth()));
             // BIAIS DE PROFONDEUR PAR NIVEAU DE ZOOM : pendant la fenêtre où un parent (repli) et ses
             // enfants coexistent, leurs surfaces quasi-coplanaires se départagent PIXEL PAR PIXEL là où
