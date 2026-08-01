@@ -909,6 +909,13 @@ void Transform::clampEyeAboveTerrain() {
     if (!terrainCollisionElevationFn || terrainCollisionMinAGL <= 0.0 || !state.valid()) {
         return;
     }
+    // Isomaps : TERRAIN ABSENT DU STYLE = aucune contrainte (queryTerrainElevation renvoie nullopt si
+    // et seulement si le style n'a pas de terrain — avec terrain, il répond toujours, au pire 0).
+    // Sans cette garde, la rampe de pitch s'appliquait aux cartes 2D (mesuré au vendorage dans l'app
+    // Isomaps : pitch verrouillé à plat aux zooms pays sur la carte classique).
+    if (!terrainCollisionElevationFn(state.getLatLng())) {
+        return;
+    }
     // Isomaps RAMPE DE PITCH AU DÉZOOM : sous ~zoom 7 la 3D inclinée perd son sens et multiplie les
     // cas limites (vue planétaire pitchée : frustum immense, cover vide sous le minzoom du DEM —
     // mesuré maillage=0 à zoom 2,2). Pitch max = 85° à zoom ≥ 7, décroissance linéaire, 0° sous 4,5.
