@@ -451,7 +451,9 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         auto* demTile = const_cast<RasterDEMTile*>(static_cast<const RasterDEMTile*>(&tile));
         auto* hillshadeBucket = demTile->getBucket();
         const auto* demData = hillshadeBucket ? &hillshadeBucket->getDEMData() : nullptr;
-        if (demData && demData->getImagePtr() && !demData->getImagePtr()->size.isEmpty()) {
+        // Isomaps : tuile entièrement NoData (eau du large) = ABSENTE → le maillage garde l'ancêtre.
+        if (demData && !demData->isAllNoData() && demData->getImagePtr() &&
+            !demData->getImagePtr()->size.isEmpty()) {
             // All tiles come from the same raster-dem source, so they share one
             // encoding and DEM dimension
             demUnpackVector = demData->getUnpackVector();
@@ -484,7 +486,8 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             auto* demTile = static_cast<RasterDEMTile*>(tilePtr.get());
             auto* bucket = demTile->getBucket();
             const auto* demData = bucket ? &bucket->getDEMData() : nullptr;
-            if (demData && demData->getImagePtr() && !demData->getImagePtr()->size.isEmpty()) {
+            if (demData && !demData->isAllNoData() && demData->getImagePtr() &&
+                !demData->getImagePtr()->size.isEmpty()) {
                 demUnpackVector = demData->getUnpackVector();
                 demDim = demData->dim;
                 if (auto texture = createDEMTexture(context, *demData)) {
@@ -1063,7 +1066,15 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             }
             if (all && !vacuousLeaves.empty()) {
                 // Un quadrant « vacant » encore visible à l'écran → masquer ferait un trou : on garde.
-                const auto visible = util::frustumCull({.transformState = state}, vacuousLeaves);
+                // AVEC ÉLÉVATION, impérativement : sans provider, frustumCull teste des boîtes PLATES à
+                // z=0 — à fort pitch, l'empreinte au niveau de la mer d'un terrain à 700 m sort du
+                // frustum → quadrant jugé « hors champ » à tort → parent masqué → plaque couleur du
+                // fond de style (mesuré : « tache bleu ciel » sur les contreforts au-dessus du Léman,
+                // qui réapparaissait en BAISSANT le pitch).
+                StableElevationProvider cullElevation(
+                    demSource, getExaggeration(), meshTileElevation, meshTileElevationFinal);
+                const auto visible = util::frustumCull(
+                    {.transformState = state, .elevationProvider = &cullElevation}, vacuousLeaves);
                 if (!visible.empty()) {
                     all = false;
                 }
@@ -1082,7 +1093,8 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     }
     // Isomaps 🕳 DIAG (paire de la sonde tile_cover, même interrupteur d'esprit) : côté RENDU — la
     // tuile du maillage contenant le CENTRE de l'écran a-t-elle un drawable DESSINÉ (présent ET non
-    // masqué) ? Ne logge que les anomalies. Passer à 1 pour débugger.
+    // masqué), et à quelle texture satellite est-elle liée ? Répond TOUJOURS (y compris « aucune
+    // tuile ») pour lever l'ambiguïté « pas de log = sain ou sonde à côté ». Passer à 1 pour débugger.
 #if 0
     {
         // Sonde DYNAMIQUE : suit le CENTRE de l'écran (mettre le trou sous le réticule).
@@ -1090,6 +1102,7 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
         const double probeX = (probeLL.longitude() + 180.0) / 360.0;
         const double probeLatRad = probeLL.latitude() * M_PI / 180.0;
         const double probeY = (1.0 - std::log(std::tan(M_PI / 4.0 + probeLatRad / 2.0)) / M_PI) / 2.0;
+        std::string verdict = "AUCUNE TUILE de maillage au centre";
         for (const auto& id : meshTiles) {
             const double s = std::pow(2.0, static_cast<double>(id.canonical.z));
             if (id.wrap != 0 || static_cast<uint32_t>(probeX * s) != id.canonical.x ||
@@ -1104,11 +1117,18 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                     enabled = true;
                 }
             });
-            if (!hasDrawable || !enabled) {
-                Log::Warning(Event::Render,
-                             "🕳 RPROBE z" + util::toString(static_cast<int>(id.canonical.z)) +
-                                 (hasDrawable ? " drawable MASQUÉ" : " drawable ABSENT"));
-            }
+            const auto mc = drawableMapCoords.find(oid);
+            const std::string sat = mc == drawableMapCoords.end()
+                                        ? "sat=?"
+                                        : ("sat=" + util::toString(mc->second[0]));
+            verdict = "z" + util::toString(static_cast<int>(id.canonical.z)) +
+                      (hasDrawable ? (enabled ? " OK dessiné " : " MASQUÉ ") : " drawable ABSENT ") + sat;
+            break;
+        }
+        static std::string s_lastVerdict;
+        if (verdict != s_lastVerdict) {
+            s_lastVerdict = verdict;
+            Log::Warning(Event::Render, "🕳 RPROBE " + verdict);
         }
     }
 #endif
