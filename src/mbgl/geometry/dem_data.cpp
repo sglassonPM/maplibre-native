@@ -23,6 +23,46 @@ DEMData::DEMData(const PremultipliedImage& _image, Tileset::RasterEncoding _enco
         source += dim;
     }
 
+    // Isomaps : RÉPARATION NoData AU DÉCODAGE. Les pyramides DEM sans bathymétrie encodent l'eau en
+    // NoData (noir terrain-RGB = −10000 m ; mesuré : tuiles z13-z16 entièrement à −9999 sur le Léman).
+    // Sans réparation : plage d'élévation à −11 km → boîte de frustum sous terre → tuile jamais émise
+    // par le cover → bloc grossier pâle permanent ; et si elle est émise, le maillage plonge en abîme.
+    //  • Tuile MIXTE (rive) : chaque pixel NoData prend le MINIMUM VALIDE de la tuile ≈ l'altitude du
+    //    plan d'eau — exactement la surface attendue.
+    //  • Tuile ENTIÈREMENT NoData (large) : marquée invalide (isAllNoData) — les consommateurs la
+    //    traitent comme ABSENTE et se replient sur l'ancêtre (plus grossier mais correct).
+    {
+        constexpr int32_t kNoDataFloorMeters = -600; // sous la mer Morte : invraisemblable sur Terre
+        int32_t minValid = std::numeric_limits<int32_t>::max();
+        for (int32_t y = 0; y < dim; y++) {
+            for (int32_t x = 0; x < dim; x++) {
+                const int32_t v = get(x, y);
+                if (v >= kNoDataFloorMeters) {
+                    minValid = std::min(minValid, v);
+                }
+            }
+        }
+        if (minValid == std::numeric_limits<int32_t>::max()) {
+            allNoData = true;
+        } else {
+            const auto& unpack = getUnpackVector();
+            // Ré-encodage inverse de get() : q tel que r*u0 + g*u1 + b*u2 − u3 = minValid, avec
+            // r=q>>16, g=(q>>8)&255, b=q&255 (u0/u1/u2 sont en progression ×256 pour les 2 encodages).
+            const auto q = static_cast<uint32_t>((static_cast<double>(minValid) + unpack[3]) / unpack[2]);
+            auto* px = image->data.get();
+            for (int32_t y = 0; y < dim; y++) {
+                for (int32_t x = 0; x < dim; x++) {
+                    if (get(x, y) < kNoDataFloorMeters) {
+                        uint8_t* p = px + idx(x, y) * 4;
+                        p[0] = static_cast<uint8_t>((q >> 16) & 0xFF);
+                        p[1] = static_cast<uint8_t>((q >> 8) & 0xFF);
+                        p[2] = static_cast<uint8_t>(q & 0xFF);
+                    }
+                }
+            }
+        }
+    }
+
     // in order to avoid flashing seams between tiles, here we are initially
     // populating a 1px border of pixels around the image with the data of the
     // nearest pixel from the image. this data is eventually replaced when the

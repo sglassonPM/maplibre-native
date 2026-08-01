@@ -28,6 +28,9 @@ DEMElevationProvider::DEMElevationProvider(const RenderSource* demSource_, doubl
         if (!bucket) {
             return;
         }
+        if (bucket->getDEMData().isAllNoData()) {
+            return; // Isomaps : eau du large sans bathymétrie → tuile « absente », repli d'ancêtre
+        }
         index.emplace(candidate, &bucket->getDEMData()); // doublons overscalés : premier gagnant, même DEM
     };
     if (const auto* loaded = demSource->getLoadedTiles()) {
@@ -77,7 +80,21 @@ std::optional<Range<double>> DEMElevationProvider::getTileElevationRange(const C
     }
     // Exaggeration is applied to the mesh in the terrain vertex shader, so the bounds
     // have to carry it too, or an exaggerated peak would still be culled.
-    return Range<double>{best->getMinElevation() * exaggeration, best->getMaxElevation() * exaggeration};
+    // Isomaps GARDE DE PLAUSIBILITÉ (pendant de celle de getElevation) : le NoData terrain-RGB (noir
+    // = −10000 m) ou un PNG tronqué décodent des plages absurdes ; une plage empoisonnée expédie la
+    // boîte de frustum à −11 km sous terre → nœud jugé « invisible » → sous-arbre JAMAIS émis → bloc
+    // grossier pâle permanent au-dessus de la zone (mesuré : 🕳 PROBE z14 CULL-frustum
+    // boxZ=[−11149,−10849] m au réticule, alors que le CDN sert des tuiles saines → corruption de
+    // décodage locale). Hors [−600, 9500] m (réel, hors exagération) = invraisemblable : plage
+    // entièrement absurde → nullopt (replis ancêtre/cache du Stable) ; borne isolée → clamp.
+    double mn = best->getMinElevation();
+    double mx = best->getMaxElevation();
+    if (mx < -600.0 || mn > 9500.0 || mn > mx) {
+        return std::nullopt;
+    }
+    mn = std::max(mn, -600.0);
+    mx = std::min(mx, 9500.0);
+    return Range<double>{mn * exaggeration, mx * exaggeration};
 }
 
 StableElevationProvider::StableElevationProvider(const RenderSource* demSource_,

@@ -24,6 +24,10 @@ public:
 
     /// Lowest elevation in the tile, in meters, excluding the backfilled border.
     int32_t getMinElevation() const { return minElevation; }
+
+    /// Isomaps : tuile DEM ENTIÈREMENT NoData (eau du large sans bathymétrie, cf. réparation au
+    /// décodage dans le constructeur) — à traiter comme ABSENTE (repli d'ancêtre), jamais indexée.
+    bool isAllNoData() const { return allNoData; }
     /// Highest elevation in the tile, in meters, excluding the backfilled border.
     int32_t getMaxElevation() const { return maxElevation; }
 
@@ -35,6 +39,7 @@ private:
     std::shared_ptr<PremultipliedImage> image;
     int32_t minElevation = 0;
     int32_t maxElevation = 0;
+    bool allNoData = false; // Isomaps : cf. isAllNoData()
 
     size_t idx(const int32_t x, const int32_t y) const {
         assert(x >= -1);
