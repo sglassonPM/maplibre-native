@@ -738,6 +738,12 @@ ScreenCoordinate Transform::latLngToScreenCoordinate(const LatLng& latLng) const
     }
     vec4 p;
     ScreenCoordinate point = state.latLngToScreenCoordinate(latLng, p, groundAltitude);
+    // Point DERRIÈRE le plan caméra (w <= 0) : la division perspective retourne la projection, qui
+    // retombe n'importe où dans l'écran (mesuré : rond bleu de position flottant en plein ciel quand
+    // l'utilisateur est hors champ). Pas de coordonnée écran valide → loin hors écran, la vue se masque.
+    if (p[3] <= 0.0) {
+        return {-1e9, -1e9};
+    }
     point.y = state.getSize().height - point.y;
     return point;
 }
