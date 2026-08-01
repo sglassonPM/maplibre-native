@@ -437,6 +437,14 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
                     const double fogZoomCap = std::max(6.0, 13.0 - 2.0 * std::log2(distMeters / 20000.0));
                     if (static_cast<double>(node.zoom) + 1.0 > fogZoomCap) shouldSplitTile = false;
                 }
+                // PLANCHER DE CHAMP ULTRA-PROCHE : la formule standard raffine RELATIVEMENT à la distance
+                // du CENTRE (+~1,7 niveau max). Depuis une crête en visant l'autre versant (centre loin),
+                // le sol sous l'œil plafonnait à « zoom du centre +1,7 » → premier plan flou pendant que
+                // le second plan visé est net (mesuré, crête du Goûter). À moins de 500 m de l'œil : on
+                // subdivise toujours (borné par maxZoom → coût de quelques tuiles).
+                if (distMeters < 500.0) {
+                    shouldSplitTile = true;
+                }
             }
         } else {
             const vec3 distanceXyz = node.aabb.distanceXYZ(centerCoord);
