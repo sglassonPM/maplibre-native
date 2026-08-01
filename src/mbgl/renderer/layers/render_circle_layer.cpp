@@ -174,7 +174,11 @@ void RenderCircleLayer::update(gfx::ShaderRegistry& shaders,
 
     // Set up a layer group
     if (!layerGroup) {
-        if (auto layerGroup_ = context.createTileLayerGroup(layerIndex, /*initialCapacity=*/64, getID(), false)) {
+        // Isomaps : renderToTerrain = TRUE — les circles DRAPENT sur le relief comme lignes/fills.
+        // À false ils rendaient en passe principale sans test contre le terrain → points d'eau
+        // visibles À TRAVERS les montagnes en 3D (constaté). Drapés, ils sont occlus naturellement
+        // (peints sur la surface) ; sans terrain, aucun changement (drapage inactif).
+        if (auto layerGroup_ = context.createTileLayerGroup(layerIndex, /*initialCapacity=*/64, getID(), true)) {
             setLayerGroup(std::move(layerGroup_), changes);
         } else {
             return;
