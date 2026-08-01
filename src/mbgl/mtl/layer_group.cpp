@@ -94,6 +94,16 @@ void LayerGroup::render(RenderOrchestrator&, PaintParameters& parameters) {
         // lui imposer cet état serait incorrect (et invalide côté Metal sans attache de profondeur).
         if (drawable.getIs3D() && getName() == "terrain") {
             renderPass.setDepthStencilState(getState3D(drawable.getEnableDepth()));
+            // BIAIS DE PROFONDEUR PAR NIVEAU DE ZOOM : pendant la fenêtre où un parent (repli) et ses
+            // enfants coexistent, leurs surfaces quasi-coplanaires se départagent PIXEL PAR PIXEL là où
+            // elles se croisent à quelques cm (« micro-trous » dans la tuile floue laissant voir la nette
+            // derrière — mesuré). Reversed-Z (GreaterEqual) : un epsilon POSITIF par niveau met la tuile
+            // la plus FINE devant, déterministiquement, sur les seuls quasi-ex-æquo (l'ordre réel des
+            // vraies occlusions, à des mètres d'écart, n'est pas affecté).
+            const float levelBias = drawable.getTileID()
+                                        ? static_cast<float>(drawable.getTileID()->canonical.z)
+                                        : 0.0f;
+            renderPass.getMetalEncoder()->setDepthBias(levelBias * 2.0f, 0.0f, 0.0f);
         }
 
         drawable.draw(parameters);

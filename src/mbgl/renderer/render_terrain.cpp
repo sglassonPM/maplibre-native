@@ -897,6 +897,14 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
     // Sinon on la garde une frame de plus (mieux un ancien contenu qu'un trou). Chevauchement
     // parent/enfants possible quelques frames : terrain opaque, artefact mineur et transitoire.
     {
+        // Finesse EFFECTIVE du satellite affiché par une tuile : zoom canonique + log2(map_coords[0])
+        // (1.0 = exact, 0.5 = ancêtre −1…). Sert à ne jamais RÉGRESSER en netteté lors d'un retrait.
+        const auto effSatZoom = [&](const OverscaledTileID& id) -> double {
+            const auto mc = drawableMapCoords.find(id);
+            if (mc == drawableMapCoords.end()) return -1.0;
+            return static_cast<double>(id.canonical.z) +
+                   std::log2(std::max(1e-6, static_cast<double>(mc->second[0])));
+        };
         std::vector<OverscaledTileID> removable;
         for (const auto& entry : tilesWithDrawables) {
             const OverscaledTileID& tid = entry.first;
@@ -911,7 +919,18 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                 const OverscaledTileID ancId(anc.z, tuw.wrap, anc);
                 if (currentTiles.contains(ancId)) {
                     ancestorInCover = true;
-                    covered = tilesWithDrawables.contains(ancId);
+                    // GARDE DE NETTETÉ : au repos après un mouvement, le cover redescend (LOD) et cette
+                    // branche remplaçait des enfants NETS par un ancêtre encore lié à un satellite
+                    // d'ancêtre → « zones nettes qui deviennent floues à l'arrêt » (mesuré : z18 retirés
+                    // pendant que satAnc1≈9 persiste). On ne retire l'enfant que si l'ancêtre est
+                    // texture-EXACTE (sa qualité cible — la marche z+1→z est celle voulue par le LOD) ou
+                    // au moins aussi fin que l'enfant. En attendant, l'enfant retenu reste VISIBLE devant
+                    // le parent flou grâce au biais de profondeur par niveau (mtl/layer_group.cpp).
+                    if (tilesWithDrawables.contains(ancId)) {
+                        const auto ancMc = drawableMapCoords.find(ancId);
+                        const bool ancExact = ancMc != drawableMapCoords.end() && ancMc->second[0] >= 1.0f;
+                        covered = ancExact || effSatZoom(ancId) >= effSatZoom(tid);
+                    }
                 }
             }
             bool any = false;
@@ -956,6 +975,63 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                 tilesWithDrawables.erase(tid);
                 drawableEpoch.erase(tid);
             }
+        }
+    }
+    // ANTI-ENTRELACS : ne jamais DESSINER deux surfaces pour la même zone. Pendant les transitions
+    // (zoom, retrait différé au re-couvrement, garde de netteté), parent et enfants coexistent
+    // volontairement ; leurs maillages (DEM lissé vs DEM fin) diffèrent de quelques mètres → le test de
+    // profondeur départage PIXEL PAR PIXEL → plages entrelacées net/flou (« micro-trous » au sein des
+    // tuiles, capture 01/08 ; fréquent à chaque zoom). Règle : une tuile dont l'empreinte est
+    // ENTIÈREMENT pavée par des tuiles plus fines ayant un drawable est MASQUÉE (setEnabled(false)) —
+    // pas retirée : elle reste en réserve et réapparaît telle quelle si un enfant disparaît. Pavage
+    // partiel → les deux restent dessinées (entrelacs résiduel limité aux bords de couverture).
+    {
+        std::unordered_set<OverscaledTileID> ancOfDrawn;
+        uint8_t maxDrawnZ = 0;
+        for (const auto& [tid, tier] : tilesWithDrawables) {
+            maxDrawnZ = std::max(maxDrawnZ, tid.canonical.z);
+            for (int zz = static_cast<int>(tid.canonical.z) - 1; zz >= 0; --zz) {
+                const CanonicalTileID anc = tid.canonical.scaledTo(static_cast<uint8_t>(zz));
+                ancOfDrawn.insert(OverscaledTileID(anc.z, tid.wrap, anc));
+            }
+        }
+        // « pleine » = a un drawable, ou ses 4 quadrants pleins. Récursion bornée aux ancêtres de tuiles
+        // dessinées (tout autre sous-arbre répond faux immédiatement) → O(dessinées × niveaux).
+        std::unordered_map<OverscaledTileID, bool> filledMemo;
+        const std::function<bool(const OverscaledTileID&)> filled = [&](const OverscaledTileID& id) -> bool {
+            if (tilesWithDrawables.contains(id)) return true;
+            if (id.canonical.z >= maxDrawnZ || !ancOfDrawn.contains(id)) return false;
+            if (const auto it = filledMemo.find(id); it != filledMemo.end()) return it->second;
+            bool all = true;
+            for (int q = 0; q < 4 && all; ++q) {
+                const CanonicalTileID c(static_cast<uint8_t>(id.canonical.z + 1),
+                                        (id.canonical.x << 1) + (q & 1),
+                                        (id.canonical.y << 1) + (q >> 1));
+                all = filled(OverscaledTileID(c.z, id.wrap, c));
+            }
+            filledMemo[id] = all;
+            return all;
+        };
+        std::unordered_set<OverscaledTileID> hidden;
+        for (const auto& [tid, tier] : tilesWithDrawables) {
+            if (tid.canonical.z >= maxDrawnZ) continue;
+            bool all = true;
+            for (int q = 0; q < 4 && all; ++q) {
+                const CanonicalTileID c(static_cast<uint8_t>(tid.canonical.z + 1),
+                                        (tid.canonical.x << 1) + (q & 1),
+                                        (tid.canonical.y << 1) + (q >> 1));
+                all = filled(OverscaledTileID(c.z, tid.wrap, c));
+            }
+            if (all) hidden.insert(tid);
+        }
+        const auto applyVisibility = [&](gfx::Drawable& drawable) {
+            if (drawable.getTileID()) {
+                drawable.setEnabled(!hidden.contains(*drawable.getTileID()));
+            }
+        };
+        lg->visitDrawables(applyVisibility);
+        if (depthLg) {
+            depthLg->visitDrawables(applyVisibility);
         }
     }
     if (isomapsBudgetOut) {
