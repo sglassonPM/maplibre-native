@@ -481,7 +481,6 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
 @property (weak, nonatomic) IBOutlet UIButton *hudLabel;
 @property (nonatomic, strong) UILabel *isomapsPitchLabel;
 @property (nonatomic, strong) UILabel *isomapsSpeedLabel; // Isomaps DIAG : vitesses sol (réglage gestes)
-@property (nonatomic, strong) UILabel *isomapsCrosshairLabel; // Isomaps DIAG : réticule sur le centre carte
 @property (nonatomic) BOOL isomapsInitialCameraApplied; // Isomaps : ne poser la caméra qu'une fois (1er style)
 @property (nonatomic, strong) UIImageView *isomapsLogoView;
 @property (weak, nonatomic) IBOutlet MBXFrameTimeGraphView *frameTimeGraphView;
@@ -3363,17 +3362,6 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
         ]];
         self.isomapsSpeedLabel = spd;
 
-        // Isomaps DIAG — RÉTICULE sur le CENTRE CARTE réel (pas le centre géométrique de l'écran : à
-        // fort pitch les deux divergent de plusieurs km au sol). Position recalée à chaque tick du
-        // timer via convertCoordinate (projetée AU SOL, terrain compris). Sert aux sondes 🕳.
-        UILabel *crosshair = [[UILabel alloc] init];
-        crosshair.text = @"✚";
-        crosshair.font = [UIFont systemFontOfSize:22 weight:UIFontWeightBold];
-        crosshair.textColor = [UIColor colorWithRed:1.0 green:0.2 blue:0.2 alpha:0.9];
-        crosshair.userInteractionEnabled = NO;
-        [crosshair sizeToFit];
-        [self.view addSubview:crosshair];
-        self.isomapsCrosshairLabel = crosshair;
 
         // 🧪 Isomaps DIAG (à retirer) — rafraîchit pitch + compte de tuiles en direct (4×/s), car ni
         // regionDidChange ni le HUD ne se déclenchent quand les tuiles se chargent à caméra immobile.
@@ -3404,8 +3392,6 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
             s.isomapsSpeedLabel.text =
                 [NSString stringWithFormat:@"sol %.0f · vert %+.0f m/s · %.2f m/pt · ✚%.4f,%.4f",
                                            groundSpeed, verticalSpeed, mPerPt, ctr.latitude, ctr.longitude];
-            // Réticule : projeté sur le CENTRE CARTE réel (au sol, terrain compris).
-            s.isomapsCrosshairLabel.center = [s.mapView convertCoordinate:ctr toPointToView:s.view];
             // 🧠 Empreinte mémoire réelle du process (phys_footprint = ce que Jetsam compte).
             task_vm_info_data_t vmInfo;
             mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
