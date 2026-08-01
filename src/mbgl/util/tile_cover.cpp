@@ -432,9 +432,19 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
                 // de 3 niveaux d'un coup au franchissement d'un seuil : « nette puis très floue quelques ms
                 // plus tard » mesuré). Même droite d'ancrage, −2 niveaux par octave de distance au-delà de
                 // 20 km, plancher 6.
+                // MÊME MÉTRIQUE QUE LA BRUME : la brume du shader travaille en distance HORIZONTALE (à la
+                // verticale l'air traversé est mince → pas de voile au nadir). L'ancien plafond en distance
+                // 3D écrasait la vue plongeante de haute altitude : à 100 km d'altitude, le sol au nadir est
+                // à 100 km en 3D mais 0 km horizontal → non voilé, et pourtant plafonné z7 → « une seule
+                // tuile très floue » (mesuré, 40-130 km d'altitude). Ancre également ALIGNÉE sur la loi de
+                // la brume (fogStart = max(8 km, alt×2)) : elle croît avec la hauteur de l'œil.
                 const double distMeters = vec3Length(camToTileTiles) / metersToTileUnits;
-                if (distMeters > 20000.0) {
-                    const double fogZoomCap = std::max(6.0, 13.0 - 2.0 * std::log2(distMeters / 20000.0));
+                const double distHorizMeters = std::hypot(camToTileTiles[0], camToTileTiles[1]) / metersToTileUnits;
+                const double eyeAGLMeters = std::max(0.0, eyeASLMeters - cameraGroundM);
+                const double capAnchorMeters = std::max(20000.0, eyeAGLMeters * 2.0);
+                if (distHorizMeters > capAnchorMeters) {
+                    const double fogZoomCap = std::max(
+                        6.0, 13.0 - 2.0 * std::log2(distHorizMeters / capAnchorMeters));
                     if (static_cast<double>(node.zoom) + 1.0 > fogZoomCap) shouldSplitTile = false;
                 }
                 // PLANCHER DE CHAMP ULTRA-PROCHE : la formule standard raffine RELATIVEMENT à la distance
