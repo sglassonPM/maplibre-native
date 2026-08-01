@@ -725,7 +725,19 @@ void Transform::setGestureInProgress(bool inProgress) {
 // MARK: Conversion and projection
 
 ScreenCoordinate Transform::latLngToScreenCoordinate(const LatLng& latLng) const {
-    ScreenCoordinate point = state.latLngToScreenCoordinate(latLng);
+    // Isomaps : projeter AU SOL (surface rendue, exagération comprise) et non à z=0 (niveau de la mer).
+    // À pitch 0 la différence est invisible (projection verticale) ; dès que pitch > 0, la projection
+    // z=0 glisse le long du rayon → annotation qui se déplace avec la caméra et « flotte en l'air »
+    // (mesuré : rond bleu de position utilisateur). Sans terrain (fn absente ou point sans DEM) : z=0,
+    // comportement historique.
+    double groundAltitude = 0.0;
+    if (terrainCollisionElevationFn) {
+        if (const auto e = terrainCollisionElevationFn(latLng)) {
+            groundAltitude = *e;
+        }
+    }
+    vec4 p;
+    ScreenCoordinate point = state.latLngToScreenCoordinate(latLng, p, groundAltitude);
     point.y = state.getSize().height - point.y;
     return point;
 }

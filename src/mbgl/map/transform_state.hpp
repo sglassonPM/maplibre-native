@@ -229,6 +229,9 @@ public:
     // Conversion
     ScreenCoordinate latLngToScreenCoordinate(const LatLng&) const;
     ScreenCoordinate latLngToScreenCoordinate(const LatLng&, vec4&) const;
+    // Isomaps : projection À UNE ALTITUDE (mètres monde, surface rendue) — z=0 projette au niveau de la
+    // mer, ce qui fait glisser/flotter toute annotation dès que pitch > 0 en terrain 3D.
+    ScreenCoordinate latLngToScreenCoordinate(const LatLng&, vec4&, double altitudeMeters) const;
     LatLng screenCoordinateToLatLng(const ScreenCoordinate&, LatLng::WrapMode = LatLng::Unwrapped) const;
     // Implements mapbox-gl-js pointCoordinate() : MercatorCoordinate.
     TileCoordinate screenCoordinateToTileCoordinate(const ScreenCoordinate&, uint8_t atZoom) const;

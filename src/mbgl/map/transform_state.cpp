@@ -765,12 +765,20 @@ ScreenCoordinate TransformState::latLngToScreenCoordinate(const LatLng& latLng) 
 }
 
 ScreenCoordinate TransformState::latLngToScreenCoordinate(const LatLng& latLng, vec4& p) const {
+    return latLngToScreenCoordinate(latLng, p, 0.0);
+}
+
+ScreenCoordinate TransformState::latLngToScreenCoordinate(const LatLng& latLng,
+                                                          vec4& p,
+                                                          double altitudeMeters) const {
     if (size.isEmpty()) {
         return {};
     }
 
     Point<double> pt = Projection::project(latLng, scale) / util::tileSize_D;
-    vec4 c = {{pt.x, pt.y, 0, 1}};
+    // Isomaps : l'espace monde de coordMatrix est (x, y pixels, z MÈTRES) — cf.
+    // screenCoordinateToTileCoordinate. altitudeMeters = surface rendue (exagération comprise).
+    vec4 c = {{pt.x, pt.y, altitudeMeters, 1}};
     matrix::transformMat4(p, c, getCoordMatrix());
     return {p[0] / p[3], size.height - p[1] / p[3]};
 }
