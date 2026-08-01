@@ -40,9 +40,9 @@ struct alignas(16) SymbolDrawableUBO {
     /* 248 */ float opacity_t;
     /* 252 */ float halo_width_t;
     /* 256 */ float halo_blur_t;
-    /* 260 */ float pad1;
-    /* 264 */ float pad2;
-    /* 268 */ float pad3;
+    /* 260 */ float fog_cam_x;
+    /* 264 */ float fog_cam_y;
+    /* 268 */ float fog_m_per_unit;
 
     // 3D terrain elevation
     /* 272 */ float4 dem_coords;
@@ -50,7 +50,7 @@ struct alignas(16) SymbolDrawableUBO {
     /* 304 */ float dem_dim;
     /* 308 */ float dem_exaggeration;
     /* 312 */ float dem_enabled;
-    /* 316 */ float pad4;
+    /* 316 */ float fog_start;
     /* 320 */
 };
 static_assert(sizeof(SymbolDrawableUBO) == 20 * 16, "wrong size");
@@ -158,6 +158,12 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         }
 
     const float2 a_pos = vertx.pos_offset.xy;
+    // Isomaps BRUME symboles : même loi que le voile du terrain (fog_start puis +47 km), mais
+    // extinction TOTALE au voile plein (le terrain garde des silhouettes, pas les étiquettes).
+    // fog_m_per_unit = 0 (pas de terrain / screen-space) => keep = 1, inactif.
+    const half isomapsFogKeep = half(1.0 -
+        clamp((length(a_pos - float2(drawable.fog_cam_x, drawable.fog_cam_y)) * drawable.fog_m_per_unit -
+               drawable.fog_start) / 47000.0, 0.0, 1.0));
     const float2 a_offset = vertx.pos_offset.zw;
 
     const float2 a_tex = vertx.data.xy;
@@ -232,9 +238,9 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         .position     = position,
         .tex          = half2(a_tex / drawable.texsize),
 #if defined(HAS_UNIFORM_u_opacity)
-        .fade_opacity = fo * vis,
+        .fade_opacity = fo * vis * isomapsFogKeep,
 #else
-        .opacity      = fo * vis,
+        .opacity      = fo * vis * isomapsFogKeep,
 #endif
     };
 }
@@ -351,6 +357,12 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     }
 
     const float2 a_pos = vertx.pos_offset.xy;
+    // Isomaps BRUME symboles : même loi que le voile du terrain (fog_start puis +47 km), mais
+    // extinction TOTALE au voile plein (le terrain garde des silhouettes, pas les étiquettes).
+    // fog_m_per_unit = 0 (pas de terrain / screen-space) => keep = 1, inactif.
+    const half isomapsFogKeep = half(1.0 -
+        clamp((length(a_pos - float2(drawable.fog_cam_x, drawable.fog_cam_y)) * drawable.fog_m_per_unit -
+               drawable.fog_start) / 47000.0, 0.0, 1.0));
     const float2 a_offset = vertx.pos_offset.zw;
 
     const float2 a_tex = vertx.data.xy;
@@ -447,7 +459,7 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         .tex          = half2(a_tex / drawable.texsize),
         .gamma_scale  = half(position.w),
         .fontScale    = half(fontScale),
-        .fade_opacity = fo * vis,
+        .fade_opacity = fo * vis * isomapsFogKeep,
     };
 }
 
@@ -606,6 +618,12 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     }
 
     const float2 a_pos = vertx.pos_offset.xy;
+    // Isomaps BRUME symboles : même loi que le voile du terrain (fog_start puis +47 km), mais
+    // extinction TOTALE au voile plein (le terrain garde des silhouettes, pas les étiquettes).
+    // fog_m_per_unit = 0 (pas de terrain / screen-space) => keep = 1, inactif.
+    const half isomapsFogKeep = half(1.0 -
+        clamp((length(a_pos - float2(drawable.fog_cam_x, drawable.fog_cam_y)) * drawable.fog_m_per_unit -
+               drawable.fog_start) / 47000.0, 0.0, 1.0));
     const float2 a_offset = vertx.pos_offset.zw;
 
     const float2 a_tex = vertx.data.xy;
@@ -690,7 +708,7 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         .tex          = half2(a_tex / (is_icon ? drawable.texsize_icon : drawable.texsize)),
         .gamma_scale  = half(gamma_scale),
         .fontScale    = half(fontScale),
-        .fade_opacity = fo * vis,
+        .fade_opacity = fo * vis * isomapsFogKeep,
         .is_icon      = is_icon,
 
 #if !defined(HAS_UNIFORM_u_fill_color)

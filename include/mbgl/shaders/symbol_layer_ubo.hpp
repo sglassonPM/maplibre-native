@@ -29,9 +29,11 @@ struct alignas(16) SymbolDrawableUBO {
     /* 248 */ float opacity_t;
     /* 252 */ float halo_width_t;
     /* 256 */ float halo_blur_t;
-    /* 260 */ float pad1;
-    /* 264 */ float pad2;
-    /* 268 */ float pad3;
+    // Isomaps BRUME symboles : caméra (œil) en repère local tuile (unités 0..8192) + mètres/unité —
+    // mêmes ingrédients que fog_params du terrain. fog_m_per_unit = 0 → brume symboles inactive.
+    /* 260 */ float fog_cam_x;
+    /* 264 */ float fog_cam_y;
+    /* 268 */ float fog_m_per_unit;
 
     // 3D terrain elevation; see RenderTerrain::getTerrainData
     /* 272 */ std::array<float, 4> dem_coords; // scale, x offset, y offset into the DEM tile, unused
@@ -39,7 +41,7 @@ struct alignas(16) SymbolDrawableUBO {
     /* 304 */ float dem_dim;
     /* 308 */ float dem_exaggeration;
     /* 312 */ float dem_enabled;
-    /* 316 */ float pad4;
+    /* 316 */ float fog_start; // Isomaps BRUME symboles : début de brume (m), même loi que le terrain
     /* 320 */
 };
 static_assert(sizeof(SymbolDrawableUBO) == 20 * 16);

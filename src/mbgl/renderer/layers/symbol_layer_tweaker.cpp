@@ -20,6 +20,9 @@
 #include <mbgl/style/layers/symbol_layer_properties.hpp>
 #include <mbgl/util/convert.hpp>
 #include <mbgl/util/std.hpp>
+#include <mbgl/map/transform_state.hpp>
+
+#include <cmath>
 
 #if MLN_RENDER_BACKEND_METAL
 #include <mbgl/shaders/mtl/symbol.hpp>
@@ -99,6 +102,31 @@ void SymbolLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
 #endif
 
     const auto camDist = state.getCameraToCenterDistance();
+
+    // Isomaps BRUME symboles : mêmes ingrédients que terrain_layer_tweaker (œil en mercator, m/unité
+    // par tuile, fogStart altitude-aware) pour estomper les étiquettes avec la MÊME loi que le voile
+    // du terrain. Sans ça, en vue pitchée d'altitude, les étiquettes des tuiles grossières lointaines
+    // (pays/villes à 300+ km) s'agglutinent le long de l'horizon.
+    constexpr double kEarthCircumference = 40075016.686;
+    constexpr double kFogPi = 3.14159265358979323846;
+    const LatLng fogCamLatLng = state.getLatLng();
+    const double fogCosLat = std::cos(fogCamLatLng.latitude() * kFogPi / 180.0);
+    double fogCamMercX, fogCamMercY;
+    const auto fogFreeCam = state.getFreeCameraOptions();
+    if (fogFreeCam.position) {
+        fogCamMercX = (*fogFreeCam.position)[0];
+        fogCamMercY = (*fogFreeCam.position)[1];
+    } else {
+        fogCamMercX = (fogCamLatLng.longitude() + 180.0) / 360.0;
+        const double sinLat = std::sin(fogCamLatLng.latitude() * kFogPi / 180.0);
+        fogCamMercY = 0.5 - std::log((1.0 + sinLat) / (1.0 - sinLat)) / (4.0 * kFogPi);
+    }
+    double fogCamAltM = 0.0;
+    if (const auto fogLoc = fogFreeCam.getLocation()) {
+        fogCamAltM = fogLoc->altitude;
+    }
+    const float fogStartM = static_cast<float>(std::max(8000.0, fogCamAltM * 2.0));
+
     const auto screenSpaceProp = symbolLayerProperties.layerImpl().layout.get<SymbolScreenSpace>();
     const auto isScreenSpace = screenSpaceProp.isConstant() ? screenSpaceProp.asConstant()
                                                             : SymbolScreenSpace::defaultValue();
@@ -204,6 +232,17 @@ void SymbolLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
         // be culled by the very surface it labels. Depth stays on without terrain.
         drawable.setEnableDepth(!terrainEnabled);
 
+        // Isomaps BRUME symboles : caméra en repère local (0..8192) de CETTE tuile. Inactive
+        // (m/unité = 0 => keep = 1 dans le shader) sans terrain ou en screen-space.
+        float fogCamX = 0.f, fogCamY = 0.f, fogMPerUnit = 0.f;
+        if (terrainEnabled && !isScreenSpace) {
+            const double fogN = static_cast<double>(1ull << tileID.canonical.z);
+            fogCamX = static_cast<float>(
+                (fogCamMercX * fogN - static_cast<double>(tileID.wrap) * fogN - tileID.canonical.x) * 8192.0);
+            fogCamY = static_cast<float>((fogCamMercY * fogN - tileID.canonical.y) * 8192.0);
+            fogMPerUnit = static_cast<float>(kEarthCircumference * fogCosLat / fogN / 8192.0);
+        }
+
 #if MLN_UBO_CONSOLIDATION
         drawableUBOVector[i] = {
 #else
@@ -231,9 +270,9 @@ void SymbolLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
             .opacity_t = getInterpFactor<TextOpacity, IconOpacity, 0>(paintProperties, isText, zoom),
             .halo_width_t = getInterpFactor<TextHaloWidth, IconHaloWidth, 0>(paintProperties, isText, zoom),
             .halo_blur_t = getInterpFactor<TextHaloBlur, IconHaloBlur, 0>(paintProperties, isText, zoom),
-            .pad1 = 0,
-            .pad2 = 0,
-            .pad3 = 0,
+            .fog_cam_x = fogCamX,
+            .fog_cam_y = fogCamY,
+            .fog_m_per_unit = fogMPerUnit,
 
             .dem_coords = terrainData ? terrainData->demCoords : std::array<float, 4>{{0, 0, 0, 0}},
             .dem_unpack = parameters.terrain ? parameters.terrain->getDEMUnpackVector()
@@ -241,7 +280,7 @@ void SymbolLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
             .dem_dim = terrainData ? terrainData->demDim : 0.0f,
             .dem_exaggeration = parameters.terrain ? parameters.terrain->getExaggeration() : 0.0f,
             .dem_enabled = terrainData ? 1.0f : 0.0f,
-            .pad4 = 0,
+            .fog_start = fogStartM,
         };
 
 #if MLN_UBO_CONSOLIDATION
