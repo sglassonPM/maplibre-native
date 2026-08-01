@@ -2284,12 +2284,12 @@ public:
     // terrain (effet rasant), le pan parait trop rapide, et d'autant plus a fort zoom. On reduit la
     // sensibilite, et davantage a mesure qu'on zoome : ~0.6 en vue large, jusqu'a ~0.3 tres zoome.
     // 1.0 = comportement d'origine.
-    const CGFloat kZoom = (CGFloat)self.zoomLevel;
-    // Ralentissement a partir de z13 — PLANCHER RELEVÉ 0.18 → 0.40 : l'ancien plancher datait du pan
-    // pré-« doigt collé » ; combiné au facteur pitch (×0.3 a fort pitch) il écrasait le déplacement a
-    // ~0.05 pres du sol → « trop lent a tres fort zoom » (mesuré). z12->0.6, z13->0.48, z14+->0.40.
-    CGFloat damping = 0.6 - (kZoom - 12.0) * 0.12;
-    damping = MAX(0.40, MIN(0.6, damping));
+    // Amortissement PLAT 0.6 : la pente au zoom (0.6 → 0.18 a z16+) datait du pan pré-« doigt collé »
+    // — depuis l'unprojection sur le plan du centre, le pan est déjà écran-vrai et ralentit
+    // NATURELLEMENT en se rapprochant du sol ; la pénalité de zoom par-dessus le rendait insupportable
+    // près du sol (mesuré : « beaucoup trop long » à zoom 18,8 pitch 0). Le facteur PITCH ci-dessous
+    // reste (l'effet rasant, lui, est réel).
+    CGFloat damping = 0.6;
     // Isomaps — facteur PITCH : au-dela de ~40deg l'effet rasant fait avancer enormement (on balaie
     // beaucoup de terrain -> retrace massif de tuiles). On ralentit progressivement : 40deg->1.0,
     // 85deg->0.3 (l'avance devient confortable a fort pitch, sans depasser le chargement des tuiles).
