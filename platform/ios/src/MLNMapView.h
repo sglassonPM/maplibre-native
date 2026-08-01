@@ -2341,6 +2341,14 @@ of north, the map will automatically snap to exact north.
 - (void *)isomapsTerrainDepthTexture;
 
 /**
+ Isomaps — rideau d'extinction des étiquettes en 3D (réglage global, en mètres) : nettes jusqu'à
+ `max(startMeters, 2 × altitude caméra)` (le plancher d'altitude préserve les étiquettes en vue
+ planétaire), éteintes `widthMeters` plus loin. `startMeters <= 0` restaure la loi par défaut
+ (8 km / 47 km). Inactif sans terrain (les styles 2D gardent toutes leurs étiquettes).
+ */
++ (void)isomapsSetSymbolFadeStart:(double)startMeters width:(double)widthMeters;
+
+/**
  Isomaps — hauteur de l'œil AU-DESSUS DU SOL (m) : altitude œil réelle − altitude du terrain sous l'œil.
  `NAN` si indisponible. Sert à afficher/vérifier l'anti-collision (doit rester ≥ seuil).
  */

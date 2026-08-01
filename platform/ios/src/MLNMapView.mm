@@ -8,6 +8,7 @@
 #include <mbgl/map/map_options.hpp>
 #include <mbgl/map/mode.hpp>
 #include <mbgl/math/wrap.hpp>
+#include <mbgl/util/isomaps_tuning.hpp>
 #if MLN_RENDER_BACKEND_METAL
 #include <mbgl/mtl/mtl_fwd.hpp>
 #include <mbgl/mtl/render_pass.hpp>
@@ -706,6 +707,10 @@ public:
   }
   std::array<int, 5> d = renderer->isomapsTerrainDebug();
   return [NSString stringWithFormat:@"terrain=%d mesh=%d targets=%d draping=%d skipped=%d", d[0], d[1], d[2], d[3], d[4]];
+}
+
++ (void)isomapsSetSymbolFadeStart:(double)startMeters width:(double)widthMeters {
+    mbgl::isomaps::setSymbolFade(static_cast<float>(startMeters), static_cast<float>(widthMeters));
 }
 
 - (void)isomapsReduceMemoryUse {

@@ -158,12 +158,13 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
         }
 
     const float2 a_pos = vertx.pos_offset.xy;
-    // Isomaps BRUME symboles : même loi que le voile du terrain (fog_start puis +47 km), mais
-    // extinction TOTALE au voile plein (le terrain garde des silhouettes, pas les étiquettes).
+    // Isomaps BRUME symboles : rideau d'extinction des étiquettes — nettes jusqu'à fog_start,
+    // éteintes fog_start + largeur plus loin (largeur portée par dem_coords.w, slot inutilisé
+    // par elevation(), pilotable par l'app via isomaps::setSymbolFade).
     // fog_m_per_unit = 0 (pas de terrain / screen-space) => keep = 1, inactif.
     const half isomapsFogKeep = half(1.0 -
         clamp((length(a_pos - float2(drawable.fog_cam_x, drawable.fog_cam_y)) * drawable.fog_m_per_unit -
-               drawable.fog_start) / 47000.0, 0.0, 1.0));
+               drawable.fog_start) / max(drawable.dem_coords.w, 1.0), 0.0, 1.0));
     const float2 a_offset = vertx.pos_offset.zw;
 
     const float2 a_tex = vertx.data.xy;
@@ -357,12 +358,13 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     }
 
     const float2 a_pos = vertx.pos_offset.xy;
-    // Isomaps BRUME symboles : même loi que le voile du terrain (fog_start puis +47 km), mais
-    // extinction TOTALE au voile plein (le terrain garde des silhouettes, pas les étiquettes).
+    // Isomaps BRUME symboles : rideau d'extinction des étiquettes — nettes jusqu'à fog_start,
+    // éteintes fog_start + largeur plus loin (largeur portée par dem_coords.w, slot inutilisé
+    // par elevation(), pilotable par l'app via isomaps::setSymbolFade).
     // fog_m_per_unit = 0 (pas de terrain / screen-space) => keep = 1, inactif.
     const half isomapsFogKeep = half(1.0 -
         clamp((length(a_pos - float2(drawable.fog_cam_x, drawable.fog_cam_y)) * drawable.fog_m_per_unit -
-               drawable.fog_start) / 47000.0, 0.0, 1.0));
+               drawable.fog_start) / max(drawable.dem_coords.w, 1.0), 0.0, 1.0));
     const float2 a_offset = vertx.pos_offset.zw;
 
     const float2 a_tex = vertx.data.xy;
@@ -618,12 +620,13 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     }
 
     const float2 a_pos = vertx.pos_offset.xy;
-    // Isomaps BRUME symboles : même loi que le voile du terrain (fog_start puis +47 km), mais
-    // extinction TOTALE au voile plein (le terrain garde des silhouettes, pas les étiquettes).
+    // Isomaps BRUME symboles : rideau d'extinction des étiquettes — nettes jusqu'à fog_start,
+    // éteintes fog_start + largeur plus loin (largeur portée par dem_coords.w, slot inutilisé
+    // par elevation(), pilotable par l'app via isomaps::setSymbolFade).
     // fog_m_per_unit = 0 (pas de terrain / screen-space) => keep = 1, inactif.
     const half isomapsFogKeep = half(1.0 -
         clamp((length(a_pos - float2(drawable.fog_cam_x, drawable.fog_cam_y)) * drawable.fog_m_per_unit -
-               drawable.fog_start) / 47000.0, 0.0, 1.0));
+               drawable.fog_start) / max(drawable.dem_coords.w, 1.0), 0.0, 1.0));
     const float2 a_offset = vertx.pos_offset.zw;
 
     const float2 a_tex = vertx.data.xy;

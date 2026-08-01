@@ -21,7 +21,9 @@
 #include <mbgl/util/convert.hpp>
 #include <mbgl/util/std.hpp>
 #include <mbgl/map/transform_state.hpp>
+#include <mbgl/util/isomaps_tuning.hpp>
 
+#include <atomic>
 #include <cmath>
 
 #if MLN_RENDER_BACKEND_METAL
@@ -29,6 +31,27 @@
 #endif // MLN_RENDER_BACKEND_METAL
 
 namespace mbgl {
+namespace isomaps {
+
+// Rideau d'extinction des étiquettes (voir isomaps_tuning.hpp). Atomiques : posés par l'app
+// (thread UI), lus par le tweaker (thread rendu).
+namespace {
+std::atomic<float> gSymbolFadeStartM{0.f};    // <= 0 => loi par défaut (8 km)
+std::atomic<float> gSymbolFadeWidthM{47000.f};
+} // namespace
+
+void setSymbolFade(float startMeters, float widthMeters) {
+    gSymbolFadeStartM = startMeters;
+    gSymbolFadeWidthM = std::max(1.0f, widthMeters);
+}
+float getSymbolFadeStartMeters() {
+    return gSymbolFadeStartM;
+}
+float getSymbolFadeWidthMeters() {
+    return gSymbolFadeWidthM;
+}
+
+} // namespace isomaps
 
 using namespace style;
 using namespace shaders;
@@ -125,7 +148,10 @@ void SymbolLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
     if (const auto fogLoc = fogFreeCam.getLocation()) {
         fogCamAltM = fogLoc->altitude;
     }
-    const float fogStartM = static_cast<float>(std::max(8000.0, fogCamAltM * 2.0));
+    const float fadeStartCfg = isomaps::getSymbolFadeStartMeters();
+    const double fadeBase = fadeStartCfg > 0.f ? static_cast<double>(fadeStartCfg) : 8000.0;
+    const float fogStartM = static_cast<float>(std::max(fadeBase, fogCamAltM * 2.0));
+    const float fogWidthM = isomaps::getSymbolFadeWidthMeters();
 
     const auto screenSpaceProp = symbolLayerProperties.layerImpl().layout.get<SymbolScreenSpace>();
     const auto isScreenSpace = screenSpaceProp.isConstant() ? screenSpaceProp.asConstant()
@@ -274,7 +300,14 @@ void SymbolLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamete
             .fog_cam_y = fogCamY,
             .fog_m_per_unit = fogMPerUnit,
 
-            .dem_coords = terrainData ? terrainData->demCoords : std::array<float, 4>{{0, 0, 0, 0}},
+            // Isomaps BRUME symboles : dem_coords.w est INUTILISÉ par elevation() (elle lit
+            // x = échelle, yz = offsets) → recyclé pour porter la LARGEUR du rideau (m).
+            .dem_coords =
+                [&] {
+                    auto dc = terrainData ? terrainData->demCoords : std::array<float, 4>{{0, 0, 0, 0}};
+                    dc[3] = fogWidthM;
+                    return dc;
+                }(),
             .dem_unpack = parameters.terrain ? parameters.terrain->getDEMUnpackVector()
                                              : std::array<float, 4>{{0, 0, 0, 0}},
             .dem_dim = terrainData ? terrainData->demDim : 0.0f,

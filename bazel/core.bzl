@@ -840,6 +840,7 @@ MLN_CORE_HEADERS = [
     "include/mbgl/util/image.hpp",
     "include/mbgl/util/immutable.hpp",
     "include/mbgl/util/indexed_tuple.hpp",
+    "include/mbgl/util/isomaps_tuning.hpp",
     "include/mbgl/util/instrumentation.hpp",
     "include/mbgl/util/interpolate.hpp",
     "include/mbgl/util/logging.hpp",
