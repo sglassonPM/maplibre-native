@@ -2499,9 +2499,11 @@ public:
   if (MLNDegreesFromRadians(self.rotationBeforeThresholdMet) < self.rotationThresholdWhileZooming &&
       self.isZooming && !self.isRotating) {
     self.rotationBeforeThresholdMet += fabs(rotate.rotation);
-    if (self.anchorRotateOrZoomGesturesToCenterCoordinate) {
-      self.rotationBeforeThresholdMet = 0;
-    }
+    // Isomaps — l'amont remettait l'accumulateur à ZÉRO quand
+    // anchorRotateOrZoomGesturesToCenterCoordinate est posé : le seuil n'était alors JAMAIS
+    // atteint tant qu'un pinch était engagé (quasi systématique à deux doigts) → rotation
+    // avalée « par moments » (elle ne marchait que si le recognizer de rotation s'engageait
+    // AVANT le pinch). On laisse l'accumulateur accumuler, flag ou pas.
     rotate.rotation = 0;
     return;
   }
