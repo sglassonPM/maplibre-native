@@ -1017,13 +1017,14 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                 ancOfCover.insert(OverscaledTileID(anc.z, tid.wrap, anc));
             }
         }
-        // « pleine » = a un drawable, ou HORS COVER (pavée par vacuité), ou ses 4 quadrants pleins.
-        // VACUITÉ : un quadrant que le cover ne demande pas (ni tuile, ni ancêtre, ni descendant dans le
-        // cover — typiquement hors frustum) ne peut pas révéler de trou VISIBLE si on masque son parent.
-        // Sans ce cas, un parent retenu dont un quadrant déborde de l'écran restait dessiné et perçait
-        // les enfants exacts par plages (mesuré : points rouges satAnc3+ au bord gauche, teinte DIAG).
-        // Récursion bornée aux ancêtres de tuiles dessinées → O(dessinées × niveaux).
-        std::unordered_map<OverscaledTileID, bool> filledMemo;
+        // « pleine » = a un drawable, ou HORS COVER (candidate à la vacuité), ou ses 4 quadrants pleins.
+        // VACUITÉ : un quadrant que le cover ne demande pas ET réellement HORS FRUSTUM ne peut pas
+        // révéler de trou visible si on masque son parent — sans ce cas, un parent retenu dont un
+        // quadrant déborde de l'écran restait dessiné et perçait les enfants exacts par plages (points
+        // rouges satAnc3+ au bord, mesuré). PIÈGE (payé) : « pas demandé par le cover » N'IMPLIQUE PAS
+        // « hors champ » — le cover peut rater une tuile VISIBLE (lac plat en incidence rasante) et la
+        // vacuité non vérifiée masquait alors le seul contenu existant → TROU ciel en plein lac
+        // (mesuré). D'où le test de frustum EFFECTIF sur les quadrants vacants avant de masquer.
         const auto wantedByCover = [&](const OverscaledTileID& id) -> bool {
             if (currentTiles.contains(id) || ancOfCover.contains(id)) return true;
             for (int zz = static_cast<int>(id.canonical.z) - 1; zz >= 0; --zz) {
@@ -1032,11 +1033,14 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             }
             return false;
         };
+        std::set<UnwrappedTileID> vacuousLeaves; // quadrants « vacants » du tid en cours d'évaluation
         const std::function<bool(const OverscaledTileID&)> filled = [&](const OverscaledTileID& id) -> bool {
             if (tilesWithDrawables.contains(id)) return true;
-            if (!wantedByCover(id)) return true; // hors cover (hors champ) : plein par vacuité
+            if (!wantedByCover(id)) {
+                vacuousLeaves.insert(id.toUnwrapped()); // vacuité À CONFIRMER par le frustum
+                return true;
+            }
             if (id.canonical.z >= maxDrawnZ || !ancOfDrawn.contains(id)) return false;
-            if (const auto it = filledMemo.find(id); it != filledMemo.end()) return it->second;
             bool all = true;
             for (int q = 0; q < 4 && all; ++q) {
                 const CanonicalTileID c(static_cast<uint8_t>(id.canonical.z + 1),
@@ -1044,18 +1048,25 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
                                         (id.canonical.y << 1) + (q >> 1));
                 all = filled(OverscaledTileID(c.z, id.wrap, c));
             }
-            filledMemo[id] = all;
             return all;
         };
         std::unordered_set<OverscaledTileID> hidden;
         for (const auto& [tid, tier] : tilesWithDrawables) {
             if (tid.canonical.z >= maxDrawnZ) continue;
+            vacuousLeaves.clear();
             bool all = true;
             for (int q = 0; q < 4 && all; ++q) {
                 const CanonicalTileID c(static_cast<uint8_t>(tid.canonical.z + 1),
                                         (tid.canonical.x << 1) + (q & 1),
                                         (tid.canonical.y << 1) + (q >> 1));
                 all = filled(OverscaledTileID(c.z, tid.wrap, c));
+            }
+            if (all && !vacuousLeaves.empty()) {
+                // Un quadrant « vacant » encore visible à l'écran → masquer ferait un trou : on garde.
+                const auto visible = util::frustumCull({.transformState = state}, vacuousLeaves);
+                if (!visible.empty()) {
+                    all = false;
+                }
             }
             if (all) hidden.insert(tid);
         }
@@ -1069,6 +1080,38 @@ void RenderTerrain::update(RenderOrchestrator& orchestrator,
             depthLg->visitDrawables(applyVisibility);
         }
     }
+    // Isomaps 🕳 DIAG (paire de la sonde tile_cover, même interrupteur d'esprit) : côté RENDU — la
+    // tuile du maillage contenant le CENTRE de l'écran a-t-elle un drawable DESSINÉ (présent ET non
+    // masqué) ? Ne logge que les anomalies. Passer à 1 pour débugger.
+#if 0
+    {
+        // Sonde DYNAMIQUE : suit le CENTRE de l'écran (mettre le trou sous le réticule).
+        const LatLng probeLL = state.getLatLng(LatLng::Wrapped);
+        const double probeX = (probeLL.longitude() + 180.0) / 360.0;
+        const double probeLatRad = probeLL.latitude() * M_PI / 180.0;
+        const double probeY = (1.0 - std::log(std::tan(M_PI / 4.0 + probeLatRad / 2.0)) / M_PI) / 2.0;
+        for (const auto& id : meshTiles) {
+            const double s = std::pow(2.0, static_cast<double>(id.canonical.z));
+            if (id.wrap != 0 || static_cast<uint32_t>(probeX * s) != id.canonical.x ||
+                static_cast<uint32_t>(probeY * s) != id.canonical.y) {
+                continue;
+            }
+            const OverscaledTileID oid(id.canonical.z, id.wrap, id.canonical);
+            const bool hasDrawable = tilesWithDrawables.contains(oid);
+            bool enabled = false;
+            lg->visitDrawables([&](gfx::Drawable& d) {
+                if (d.getTileID() && *d.getTileID() == oid && d.getEnabled()) {
+                    enabled = true;
+                }
+            });
+            if (!hasDrawable || !enabled) {
+                Log::Warning(Event::Render,
+                             "🕳 RPROBE z" + util::toString(static_cast<int>(id.canonical.z)) +
+                                 (hasDrawable ? " drawable MASQUÉ" : " drawable ABSENT"));
+            }
+        }
+    }
+#endif
     if (isomapsBudgetOut) {
         orchestrator.isomapsRequestRepaint(); // créations reportées → garantir une frame de continuation
     }

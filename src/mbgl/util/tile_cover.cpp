@@ -6,6 +6,8 @@
 #include <mbgl/util/tile_coordinate.hpp>
 #include <mbgl/util/tile_cover.hpp>
 #include <mbgl/util/tile_cover_impl.hpp>
+#include <mbgl/util/logging.hpp>
+#include <mbgl/util/string.hpp>
 
 #include <cmath>
 #include <functional>
@@ -350,6 +352,22 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
 
     stack.push_back(newRootTile(0));
 
+// Isomaps 🕳 DIAG : SONDE de traversée — trace le sort de chaque nœud contenant le CENTRE de l'écran
+// (mettre la zone suspecte sous le réticule). Outil éprouvé (a disculpé le cover pour le « trou du
+// Léman », qui était une tuile satellite égarée CHEZ MAPTILER). Passer à 1 pour débugger.
+#define ISOMAPS_COVER_PROBE 0
+#if ISOMAPS_COVER_PROBE
+    // Sonde DYNAMIQUE : suit le CENTRE de l'écran (mettre le trou sous le réticule pour tracer sa branche).
+    const LatLng probeLL = transform.getLatLng(LatLng::Wrapped);
+    const double probePX = (probeLL.longitude() + 180.0) / 360.0;
+    const double probeLatRad = probeLL.latitude() * pi / 180.0;
+    const double probePY = (1.0 - std::log(std::tan(pi / 4.0 + probeLatRad / 2.0)) / pi) / 2.0;
+    const auto probeHit = [&](const Node& n) -> bool {
+        if (n.wrap != 0 || !state.elevationProvider) return false;
+        const double s = std::pow(2.0, static_cast<double>(n.zoom));
+        return static_cast<uint32_t>(probePX * s) == n.x && static_cast<uint32_t>(probePY * s) == n.y;
+    };
+#endif
     while (!stack.empty()) {
         Node node = stack.back();
         stack.pop_back();
@@ -365,6 +383,15 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
                                                              : frustum.intersects(testAABB);
 
             if (intersection == IntersectionResult::Separate) {
+#if ISOMAPS_COVER_PROBE
+                if (probeHit(node)) {
+                    Log::Warning(Event::Render,
+                                 "🕳 PROBE z" + util::toString(static_cast<int>(node.zoom)) +
+                                     " CULL-frustum elevated=" + (elevated ? "1" : "0") +
+                                     " boxZ=[" + util::toString(testAABB.min[2] / metersToTileUnits) + "," +
+                                     util::toString(testAABB.max[2] / metersToTileUnits) + "]m");
+                }
+#endif
                 continue;
             }
 
@@ -404,6 +431,12 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
             // proche de la boîte ; un nœud entièrement au-delà de la portée optique est abandonné avec
             // tout son sous-arbre. Terrain seulement (2D inchangé).
             if (state.elevationProvider && std::hypot(camToTileTiles[0], camToTileTiles[1]) > horizonCapTiles) {
+#if ISOMAPS_COVER_PROBE
+                if (probeHit(node)) {
+                    Log::Warning(Event::Render,
+                                 "🕳 PROBE z" + util::toString(static_cast<int>(node.zoom)) + " CULL-horizon");
+                }
+#endif
                 continue;
             }
             const vec3 camToTileMercator = vec3Scale(camToTileTiles, 1.0 / worldSize);
@@ -502,6 +535,17 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
                                  (preciseElevated
                                       ? frustum.intersectsElevated(preciseAABB) != IntersectionResult::Separate
                                       : frustum.intersectsPrecise(preciseAABB, true) != IntersectionResult::Separate);
+#if ISOMAPS_COVER_PROBE
+            if (probeHit(node)) {
+                Log::Warning(Event::Render,
+                             "🕳 PROBE z" + util::toString(static_cast<int>(node.zoom)) +
+                                 (visible ? " EMIT" : " CULL-precise") +
+                                 " fullyVis=" + (node.fullyVisible ? "1" : "0") +
+                                 " elev=" + (preciseElevated ? "1" : "0") +
+                                 " boxZ=[" + util::toString(preciseAABB.min[2] / metersToTileUnits) + "," +
+                                 util::toString(preciseAABB.max[2] / metersToTileUnits) + "]m");
+            }
+#endif
             if (visible) {
                 const OverscaledTileID id = {
                     node.zoom == maxZoom ? overscaledZoom : node.zoom, node.wrap, node.zoom, node.x, node.y};
