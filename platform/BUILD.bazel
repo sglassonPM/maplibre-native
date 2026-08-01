@@ -344,6 +344,7 @@ objc_library(
         "darwin/src",
     ],
     sdk_frameworks = [
+        "UniformTypeIdentifiers",  # Isomaps : import GPX (UTType, iOS 14+)
     ] + select({
         "//:metal_renderer": [
             "MetalKit",

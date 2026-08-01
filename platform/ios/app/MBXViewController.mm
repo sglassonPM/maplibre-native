@@ -1,6 +1,7 @@
 #import "Mapbox.h"
 #import <QuartzCore/QuartzCore.h> // Isomaps : CACurrentMediaTime pour le chrono de chargement des tuiles
 #import <mach/mach.h>             // Isomaps : task_vm_info (empreinte mémoire réelle, 🧠 HUD)
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h> // Isomaps : import GPX (UTType)
 
 // 🧪 Isomaps DIAG (à retirer) — compteurs de tuiles du terrain, exposés par le moteur (render_terrain.cpp).
 extern "C" int isomapsDebugMeshTileCount(void);
@@ -283,6 +284,54 @@ fragment float4 skyFragment(VOut in [[stage_in]], constant SkyUniforms& u [[buff
 
 @end
 
+// Isomaps TEST GPX : parseur minimal — collecte les trkpt (repli rtept/wpt si la trace est vide).
+@interface IsomapsGPXParser : NSObject <NSXMLParserDelegate>
+@property (nonatomic, readonly) NSArray<NSValue *> *trackPoints;
+- (BOOL)parseData:(NSData *)data;
+@end
+
+@implementation IsomapsGPXParser {
+    NSMutableArray<NSValue *> *_trk;
+    NSMutableArray<NSValue *> *_fallback;
+}
+
+- (BOOL)parseData:(NSData *)data {
+    _trk = [NSMutableArray array];
+    _fallback = [NSMutableArray array];
+    NSXMLParser *parser = [[NSXMLParser alloc] initWithData:data];
+    parser.delegate = self;
+    const BOOL ok = [parser parse];
+    _trackPoints = _trk.count > 0 ? _trk : _fallback;
+    return ok && _trackPoints.count >= 2;
+}
+
+- (void)parser:(NSXMLParser *)parser
+    didStartElement:(NSString *)elementName
+       namespaceURI:(NSString *)namespaceURI
+      qualifiedName:(NSString *)qName
+         attributes:(NSDictionary<NSString *, NSString *> *)attributes {
+    if (![elementName isEqualToString:@"trkpt"] && ![elementName isEqualToString:@"rtept"] &&
+        ![elementName isEqualToString:@"wpt"]) {
+        return;
+    }
+    NSString *latS = attributes[@"lat"], *lonS = attributes[@"lon"];
+    if (!latS || !lonS) {
+        return;
+    }
+    const CLLocationCoordinate2D c = CLLocationCoordinate2DMake(latS.doubleValue, lonS.doubleValue);
+    if (!CLLocationCoordinate2DIsValid(c) || (c.latitude == 0 && c.longitude == 0)) {
+        return;
+    }
+    NSValue *v = [NSValue valueWithMLNCoordinate:c];
+    if ([elementName isEqualToString:@"trkpt"]) {
+        [_trk addObject:v];
+    } else {
+        [_fallback addObject:v];
+    }
+}
+
+@end
+
 static const CLLocationCoordinate2D WorldTourDestinations[] = {
     {.latitude = 38.8999418, .longitude = -77.033996},
     {.latitude = 37.7884307, .longitude = -122.3998631},
@@ -474,13 +523,16 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
 @interface MBXViewController () <UITableViewDelegate,
                                  UITableViewDataSource,
                                  MLNMapViewDelegate,
-                                 MLNComputedShapeSourceDataSource>
+                                 MLNComputedShapeSourceDataSource,
+                                 UIDocumentPickerDelegate>
 
 @property (nonatomic) IBOutlet MLNMapView *mapView;
 @property (nonatomic) MBXState *currentState;
 @property (weak, nonatomic) IBOutlet UIButton *hudLabel;
 @property (nonatomic, strong) UILabel *isomapsPitchLabel;
 @property (nonatomic, strong) UILabel *isomapsSpeedLabel; // Isomaps DIAG : vitesses sol (réglage gestes)
+@property (nonatomic, strong) UIButton *isomapsGPXButton; // Isomaps TEST : import GPX → tracé drapé 3D
+@property (nonatomic, strong) NSArray<NSValue *> *isomapsGPXPoints; // trace importée (re-posée par style)
 @property (nonatomic) BOOL isomapsInitialCameraApplied; // Isomaps : ne poser la caméra qu'une fois (1er style)
 @property (nonatomic, strong) UIImageView *isomapsLogoView;
 @property (weak, nonatomic) IBOutlet MBXFrameTimeGraphView *frameTimeGraphView;
@@ -543,6 +595,29 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
 
 - (void)viewDidLoad {
   [super viewDidLoad];
+
+  // Isomaps TEST — bouton d'import GPX (créé ici : exécution GARANTIE, indépendante du style —
+  // dans le hook de style il n'apparaissait pas sur device). Ancré au-dessus des deux barres HUD.
+  {
+    UIButton *gpx = [UIButton buttonWithType:UIButtonTypeSystem];
+    [gpx setTitle:@"GPX" forState:UIControlStateNormal];
+    gpx.titleLabel.font = [UIFont systemFontOfSize:15 weight:UIFontWeightBold];
+    gpx.tintColor = [UIColor whiteColor];
+    gpx.backgroundColor = [UIColor colorWithRed:0.95 green:0.35 blue:0.0 alpha:0.85];
+    gpx.layer.cornerRadius = 8;
+    gpx.translatesAutoresizingMaskIntoConstraints = NO;
+    [gpx addTarget:self action:@selector(isomapsImportGPX) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:gpx];
+    [NSLayoutConstraint activateConstraints:@[
+      [gpx.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor
+                                         constant:-10],
+      [gpx.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor
+                                       constant:-96],
+      [gpx.widthAnchor constraintEqualToConstant:56],
+      [gpx.heightAnchor constraintEqualToConstant:34],
+    ]];
+    self.isomapsGPXButton = gpx;
+  }
 
   // Isomaps : cache DISQUE (ambient) 512 Mo — le défaut iOS (50 Mo) ne tient que ~150 tuiles satellite
   // (~300 Ko pièce) : un aller-retour de pan re-TÉLÉCHARGEAIT tout. Le cache MÉMOIRE raster reste borné
@@ -3258,6 +3333,107 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
                            toCoordinateFromView:self.mapView];
 }
 
+// Isomaps TEST GPX — import via le sélecteur de fichiers, tracé drapé sur le terrain 3D (liseré blanc
+// + trait orange), re-posé automatiquement à chaque rechargement de style, cadrage sur la trace.
+- (void)isomapsImportGPX {
+    UIDocumentPickerViewController *picker;
+    if (@available(iOS 14.0, *)) {
+        NSMutableArray<UTType *> *types = [NSMutableArray array];
+        UTType *gpxType = [UTType typeWithFilenameExtension:@"gpx"];
+        if (gpxType) {
+            [types addObject:gpxType];
+        }
+        [types addObject:UTTypeXML];
+        [types addObject:UTTypeData];
+        picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:types];
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        picker = [[UIDocumentPickerViewController alloc]
+            initWithDocumentTypes:@[ @"com.topografix.gpx", @"public.xml", @"public.data" ]
+                           inMode:UIDocumentPickerModeImport];
+#pragma clang diagnostic pop
+    }
+    picker.delegate = self;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+    didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    NSURL *url = urls.firstObject;
+    if (!url) {
+        return;
+    }
+    const BOOL scoped = [url startAccessingSecurityScopedResource];
+    NSData *data = [NSData dataWithContentsOfURL:url];
+    if (scoped) {
+        [url stopAccessingSecurityScopedResource];
+    }
+    IsomapsGPXParser *parser = [[IsomapsGPXParser alloc] init];
+    if (!data || ![parser parseData:data]) {
+        NSLog(@"🥾 GPX : échec de lecture/parse (%@)", url.lastPathComponent);
+        return;
+    }
+    self.isomapsGPXPoints = parser.trackPoints;
+    NSLog(@"🥾 GPX : %lu points (%@)", (unsigned long)parser.trackPoints.count, url.lastPathComponent);
+    [self isomapsEnsureGPXLayers];
+
+    // Cadrage sur la trace (marges généreuses : le HUD occupe le bas).
+    CLLocationDegrees minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+    for (NSValue *v in self.isomapsGPXPoints) {
+        const CLLocationCoordinate2D c = v.MLNCoordinateValue;
+        minLat = MIN(minLat, c.latitude);
+        maxLat = MAX(maxLat, c.latitude);
+        minLng = MIN(minLng, c.longitude);
+        maxLng = MAX(maxLng, c.longitude);
+    }
+    const MLNCoordinateBounds b = MLNCoordinateBoundsMake(CLLocationCoordinate2DMake(minLat, minLng),
+                                                          CLLocationCoordinate2DMake(maxLat, maxLng));
+    [self.mapView setVisibleCoordinateBounds:b
+                                 edgePadding:UIEdgeInsetsMake(90, 40, 140, 40)
+                                    animated:YES
+                           completionHandler:nil];
+}
+
+- (void)isomapsEnsureGPXLayers {
+    if (self.isomapsGPXPoints.count < 2 || !self.mapView.style) {
+        return;
+    }
+    const NSUInteger n = self.isomapsGPXPoints.count;
+    std::vector<CLLocationCoordinate2D> coords(n);
+    for (NSUInteger i = 0; i < n; i++) {
+        coords[i] = self.isomapsGPXPoints[i].MLNCoordinateValue;
+    }
+    MLNPolylineFeature *line = [MLNPolylineFeature polylineWithCoordinates:coords.data() count:n];
+    MLNStyle *style = self.mapView.style;
+    if (MLNShapeSource *existing = (MLNShapeSource *)[style sourceWithIdentifier:@"isomaps-gpx"]) {
+        existing.shape = line;
+        return;
+    }
+    MLNShapeSource *src = [[MLNShapeSource alloc] initWithIdentifier:@"isomaps-gpx" shape:line options:nil];
+    [style addSource:src];
+    MLNLineStyleLayer *casing = [[MLNLineStyleLayer alloc] initWithIdentifier:@"isomaps-gpx-casing"
+                                                                       source:src];
+    casing.lineColor = [NSExpression expressionForConstantValue:[UIColor whiteColor]];
+    casing.lineWidth = [NSExpression expressionForConstantValue:@6];
+    casing.lineCap = [NSExpression expressionForConstantValue:@"round"];
+    casing.lineJoin = [NSExpression expressionForConstantValue:@"round"];
+    MLNLineStyleLayer *trace = [[MLNLineStyleLayer alloc] initWithIdentifier:@"isomaps-gpx-line" source:src];
+    trace.lineColor = [NSExpression
+        expressionForConstantValue:[UIColor colorWithRed:0.95 green:0.27 blue:0.0 alpha:1.0]];
+    trace.lineWidth = [NSExpression expressionForConstantValue:@3.5];
+    trace.lineCap = [NSExpression expressionForConstantValue:@"round"];
+    trace.lineJoin = [NSExpression expressionForConstantValue:@"round"];
+    // Sous les étiquettes de sommets (drapé sur le terrain comme les autres couches vectorielles).
+    if (MLNStyleLayer *peak = [style layerWithIdentifier:@"peak"]) {
+        [style insertLayer:casing belowLayer:peak];
+        [style insertLayer:trace belowLayer:peak];
+    } else {
+        [style addLayer:casing];
+        [style addLayer:trace];
+    }
+}
+
 - (void)mapView:(MLNMapView *)mapView didFinishLoadingStyle:(MLNStyle *)style {
   // Default MapLibre styles use {name_en} as their label language, which means
   // that a device with an English-language locale is already effectively
@@ -3318,6 +3494,8 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
             [style insertLayer:sky atIndex:0];
         }
     }
+
+    [self isomapsEnsureGPXLayers];
 
     // Isomaps — overlay du pitch en temps reel, pour reperer le seuil ou les trous reapparaissent.
     if (!self.isomapsPitchLabel) {
