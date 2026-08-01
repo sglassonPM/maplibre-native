@@ -190,6 +190,9 @@ public:
     // Isomaps : demande une frame supplémentaire (terrain sous budget-temps : créations reportées).
     void isomapsRequestRepaint();
 
+    /// Isomaps : accès LECTURE au RenderLayer par id (reclassement base-imagery du renderer).
+    const RenderLayer* isomapsGetRenderLayer(const std::string& id) const { return getRenderLayer(id); }
+
 private:
     bool isLoaded() const;
     bool hasTransitions(TimePoint) const;

@@ -266,7 +266,7 @@ void Renderer::Impl::render(const RenderTree& renderTree, const std::shared_ptr<
             if (!layerGroup.isBaseImagery()) {
                 return;
             }
-            if (const RenderLayer* rl = orchestrator.getRenderLayer(layerGroup.getName())) {
+            if (const RenderLayer* rl = orchestrator.isomapsGetRenderLayer(layerGroup.getName())) {
                 const std::string& src = rl->baseImpl->source;
                 if (!src.empty() && src != isomapsBasemapSrc) {
                     layerGroup.setBaseImagery(false); // raster secondaire → drapé
