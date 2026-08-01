@@ -868,6 +868,14 @@ void Transform::renormalizeCenterAltitudeToTerrain() {
     const double h1 = std::min(h0 + delta * alpha, eyeAlt - 5.0);
     const double e0 = eyeAlt - h0;
     const double e1 = eyeAlt - h1;
+    // Isomaps GUÉRISON : si h0 (état) est aberrant (poison historique — plan à 57 km, pan « 3 mm »),
+    // ne PAS s'auto-bloquer sur e0 <= 0 : resynchroniser directement l'état sur la cible saine h1.
+    if ((h0 > 10000.0 || h0 < -600.0) && h1 <= 10000.0 && h1 >= -600.0 && e1 > 1.0) {
+        Log::Warning(Event::Render,
+                     "🛑 renorm GUÉRISON h0=" + util::toString(h0) + " → h1=" + util::toString(h1));
+        state.setCenterAltitude(h1);
+        return;
+    }
     if (e0 <= 1.0 || e1 <= 1.0 || std::abs(h1 - h0) < 0.5) {
         return;
     }

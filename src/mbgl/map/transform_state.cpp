@@ -6,6 +6,7 @@
 #include <mbgl/util/constants.hpp>
 #include <mbgl/util/interpolate.hpp>
 #include <mbgl/util/logging.hpp>
+#include <mbgl/util/string.hpp>
 #include <mbgl/util/projection.hpp>
 #include <mbgl/util/tile_coordinate.hpp>
 
@@ -1046,6 +1047,18 @@ void TransformState::setLatLngZoom(const LatLng& latLng, double zoom) {
 }
 
 void TransformState::setCenterAltitude(double alt_m) {
+    // Isomaps VERROU CENTRAL anti-surface-fantôme : aucune surface terrestre n'existe hors
+    // [-600, 10 000] m (Everest × exagération). Une valeur folle ici empoisonne TOUTE la
+    // paramétrisation AGL (plan de dé-projection du pan à 57 km → « 3 mm par geste », œil
+    // catapulté, renormalisation auto-bloquée car œil − centre < 0 → le poison persiste).
+    // Les gardes amont tracent leurs chemins ; ce verrou garantit l'état quel que soit le chemin.
+    if (!(alt_m >= -600.0 && alt_m <= 10000.0)) { // !( ) : rejette aussi NaN
+        static int s_rejects = 0;
+        if ((s_rejects++ % 60) == 0) {
+            Log::Warning(Event::Render, "🛑 setCenterAltitude REFUSÉ alt=" + util::toString(alt_m));
+        }
+        return;
+    }
     z = alt_m / Projection::getMetersPerPixelAtLatitude(getLatLng().latitude(), getZoom());
     requestMatricesUpdate = true;
 }
