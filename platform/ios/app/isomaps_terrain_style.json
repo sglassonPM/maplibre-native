@@ -39,7 +39,7 @@
       "source-layer": "mountain_peak",
       "minzoom": 11.5,
       "layout": {
-        "visibility": "none",
+        "visibility": "visible",
         "text-font": [
           "Noto Sans Italic"
         ],
@@ -50,7 +50,13 @@
         "symbol-spacing": 350,
         "text-max-width": 5,
         "text-letter-spacing": 0.2,
-        "text-rotation-alignment": "map"
+        "text-rotation-alignment": "viewport",
+        "icon-rotation-alignment": "viewport",
+        "text-offset": [
+          0,
+          0.9
+        ],
+        "text-anchor": "top"
       },
       "filter": [
         "all",
@@ -61,11 +67,10 @@
         ]
       ],
       "paint": {
-        "text-translate-anchor": "map",
-        "text-translate": [
-          0,
-          20
-        ]
+        "text-color": "#1c2a33",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1.2,
+        "text-halo-blur": 0.4
       }
     }
   ],
