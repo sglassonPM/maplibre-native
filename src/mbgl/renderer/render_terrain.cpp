@@ -120,8 +120,14 @@ std::set<UnwrappedTileID> RenderTerrain::computeMeshCover(const TransformState& 
             // n'était NI émis NI subdivisé → sous-arbre abandonné → pan de terrain absent (bande bleue nette,
             // maillage=6 mesuré). Émettre grossier est sain : DEM ancêtre (z7/z10 retenu décodé) + drapage
             // ancêtre couvrent ces tuiles.
-            const auto cover = util::tileCover(
-                coverParams, baseZoom, Range<uint8_t>(std::min<uint8_t>(minLoadedZoom, 8), baseZoom));
+            // Plancher d'émission SUIVANT LE ZOOM au dézoom extrême : min(minLoadedZoom, 8) seul
+            // (hérité du minzoom 6 du DEM) interdisait d'émettre plus grossier que ~z5-6 — en vue
+            // PLANÉTAIRE (zoom 2,5, œil 11 300 km), tout le globe se payait en z5 (66 tuiles maillage,
+            // satTex 251 ≈ 1 Go → jetsam mesuré). ceil(zoom)+1 : à zoom 2,5 le monde s'émet en z3-4
+            // (dizaine de tuiles) ; dès zoom ~5, comportement inchangé.
+            const auto zoomFloor = static_cast<uint8_t>(std::max(0.0, std::ceil(state.getZoom()) + 1.0));
+            const uint8_t minEmit = std::min({minLoadedZoom, static_cast<uint8_t>(8), zoomFloor});
+            const auto cover = util::tileCover(coverParams, baseZoom, Range<uint8_t>(minEmit, baseZoom));
             for (const auto& oid : cover) {
                 out.insert(UnwrappedTileID(oid.wrap, oid.canonical));
             }

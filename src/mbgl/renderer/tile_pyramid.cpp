@@ -143,6 +143,11 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
         // maillage z17-18 au premier plan → satellite plafonné z15 (z+2 du drapage) → liaison ancêtre
         // −3 À VIE (teinte DIAG rouge, PERSISTANTE au repos ; le DEM 256, un cran mieux loti, traînait
         // ses dem1). Même graine ⇒ mêmes lois ⇒ profondeurs identiques ⇒ liaisons exactes au repos.
+        // PORTE DES APERÇUS (z2/z7/z10 ci-dessous) : reste calée sur le zoom CARTE d'origine. Avec la
+        // graine 18, `idealZoom` ne peut plus servir de porte — les filets restaient actifs même en
+        // vue PLANÉTAIRE, où un cover plat z10 du frustum = des centaines de tuiles → satTex/demTex
+        // croissaient SANS BORNE à vue fixe (mesuré : 113→264 sat à zoom 5,4, jetsam 3,3 Go à 3,7).
+        const int32_t overviewGateZoom = idealZoom;
         if (parameters.tileLodMode == TileLodMode::Distance && parameters.elevationProvider &&
             (type == SourceType::Raster || type == SourceType::RasterDEM)) {
             idealZoom = zoomRange.max;
@@ -218,7 +223,7 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
                 util::TileCoverParameters flatCoverParameters = tileCoverParameters;
                 flatCoverParameters.elevationProvider = nullptr;
                 for (const int32_t overviewZoom : {7, 10}) {
-                    if (overviewZoom >= static_cast<int32_t>(zoomRange.min) && overviewZoom < idealZoom) {
+                    if (overviewZoom >= static_cast<int32_t>(zoomRange.min) && overviewZoom < overviewGateZoom) {
                         const auto ov = util::tileCover(flatCoverParameters, overviewZoom, zoomRange);
                         overviewTiles.insert(overviewTiles.end(), ov.begin(), ov.end());
                     }
@@ -232,7 +237,7 @@ void TilePyramid::update(const std::vector<Immutable<style::LayerProperties>>& l
             // montrait z0/z1/z2 chargés au départ puis ÉVINCÉS → plus d'ancêtre global → trous bleus.
             if (type == SourceType::Raster) {
                 constexpr int32_t worldZoom = 2;
-                if (worldZoom >= static_cast<int32_t>(zoomRange.min) && worldZoom < idealZoom) {
+                if (worldZoom >= static_cast<int32_t>(zoomRange.min) && worldZoom < overviewGateZoom) {
                     const uint32_t side = 1u << worldZoom;
                     for (uint32_t x = 0; x < side; ++x) {
                         for (uint32_t y = 0; y < side; ++y) {
