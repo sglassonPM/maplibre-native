@@ -23,6 +23,7 @@ extern "C" long long isomapsDebugDemBytes(void);
 #import "MLNSettings.h"
 
 #import "MLNMapView_Private.h"
+#include <mbgl/map/map.hpp> // Isomaps : accès direct mbglMap (tileLodScale)
 
 #import "CustomStyleLayerExample.h"
 
@@ -3284,6 +3285,12 @@ CLLocationCoordinate2D randomWorldCoordinate(void) {
     // « terre en haut, ciel en bas » pendant le geste). Le « regard montant » vers un sommet se fera
     // par une cible de visée relevée / caméra libre, pas en dépassant 90° ici. 85° = plafond Mapbox.
     mapView.maximumPitch = 85.0;
+
+    // Isomaps NETTETÉ : LOD resserré (+~0,74 niveau, tileLodScale 0,6). Mesuré : la même vue était jugée
+    // « parfaite » à zoom 13,85 (cover z15-z16) et « floue » à 13,0 (cover z14) — notre LOD est un cran
+    // trop paresseux pour l'œil à zoom égal. Les garde-fous mémoire (plafonds brume/horizon, 300 tuiles
+    // max, parents 3, prefetch coupé, cache 32) bornent le surcoût ; juger au 🧠 MEM.
+    [mapView mbglMap].setTileLodScale(0.6);
 
     // Isomaps TEST — pose la caméra de RÉFÉRENCE (vue oblique Sallanches→Mont-Blanc) à chaque lancement,
     // identique à chaque fois, sans mémoriser la dernière position (cf. isomapsReferenceCamera). Une seule
