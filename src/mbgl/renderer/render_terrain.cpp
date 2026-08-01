@@ -1429,6 +1429,37 @@ void RenderTerrain::renderDepth(RenderOrchestrator& orchestrator,
         depthRenderTarget->addLayerGroup(depthLayerGroup, /*replace=*/true);
     }
 
+    // Isomaps 🎯 DIAG calibration occlusion : z NDC ATTENDU au pack pour le POINT CENTRAL
+    // (surface au centre = ce que le pack doit contenir au pixel central) + w (≈ distance) — donne
+    // les ordres de grandeur réels (plan proche effectif compris). Passer à 1 pour re-calibrer.
+#if 0
+    {
+        static int s_occlDiagTick = 0;
+        if (++s_occlDiagTick % 120 == 0) {
+            const auto& st = parameters.state;
+            const LatLng c = st.getLatLng(LatLng::Wrapped);
+            constexpr uint8_t dz = 14;
+            const auto tc = TileCoordinate::fromLatLng(dz, c).p;
+            const auto tx = static_cast<int64_t>(std::floor(tc.x));
+            const auto tyy = static_cast<int64_t>(std::floor(tc.y));
+            const UnwrappedTileID ctile(0, CanonicalTileID(dz, static_cast<uint32_t>(tx), static_cast<uint32_t>(tyy)));
+            const mat4 m = parameters.matrixForTile(ctile);
+            const vec4 in4 = {{(tc.x - static_cast<double>(tx)) * util::EXTENT,
+                               (tc.y - static_cast<double>(tyy)) * util::EXTENT,
+                               st.getCenterAltitude(),
+                               1.0}};
+            vec4 p;
+            matrix::transformMat4(p, in4, m);
+            if (p[3] > 0.0) {
+                const double zndc = 0.5 * (p[2] / p[3] + 1.0);
+                Log::Warning(Event::Render,
+                             "🎯 OCCL centre z_ndc=" + util::toString(zndc) + " (1-z)=" +
+                                 util::toString(1.0 - zndc) + " w=" + util::toString(p[3]) +
+                                 " alt=" + util::toString(st.getCenterAltitude()));
+            }
+        }
+    }
+#endif
     // The depth twin is intentionally not registered with the orchestrator, so it is
     // skipped by the global upload pass in Renderer::Impl::render(). Its drawables
     // would therefore reach draw() with buffers that were never uploaded — fatal on

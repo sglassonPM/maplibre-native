@@ -6,7 +6,11 @@
 #include <mbgl/gfx/renderer_backend.hpp>
 #include <mbgl/layermanager/layer_manager.hpp>
 #include <mbgl/renderer/renderer_impl.hpp>
+#include <mbgl/renderer/render_terrain.hpp>
 #include <mbgl/renderer/render_static_data.hpp>
+#if MLN_RENDER_BACKEND_METAL
+#include <mbgl/mtl/texture2d.hpp>
+#endif
 #include <mbgl/renderer/render_tree.hpp>
 #include <mbgl/renderer/update_parameters.hpp>
 #include <mbgl/util/instrumentation.hpp>
@@ -108,6 +112,17 @@ std::optional<double> Renderer::queryTerrainElevation(const LatLng& latLng) cons
 
 std::array<int, 5> Renderer::isomapsTerrainDebug() const {
     return impl->orchestrator.isomapsTerrainDebug();
+}
+
+void* Renderer::isomapsTerrainDepthMTLTexture() const {
+    if (auto* terrain = impl->orchestrator.getRenderTerrain()) {
+        if (const auto tex = terrain->isomapsDepthTexture()) {
+#if MLN_RENDER_BACKEND_METAL
+            return static_cast<mtl::Texture2D*>(tex.get())->getMetalTexture();
+#endif
+        }
+    }
+    return nullptr;
 }
 
 FeatureExtensionValue Renderer::queryFeatureExtensions(const std::string& sourceID,

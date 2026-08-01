@@ -57,11 +57,17 @@ void LayerGroup::render(RenderOrchestrator&, PaintParameters& parameters) {
     // le rendu précédent → test de profondeur aléatoire → l'ORDRE d'arrivée décidait (mesuré : sommet
     // correct, puis ÉCRASÉ par les tuiles du fond arrivées après). Convention reversed-Z du terrain
     // (near→1, far→0, clear 0, cf. mtl/terrain.hpp) → GreaterEqual + écriture.
+    // « terrain-depth » (pack d'occlusion des symboles) : convention STANDARD (near→0, clear 1.0,
+    // LessEqual) — son shader remappe z'=(z+w)/2, PAS le reversed-Z de la surface, pour rester
+    // directement comparable au z NDC des symboles (calculate_visibility).
+    const bool standardDepthTwin = getName() == "terrain-depth";
     std::optional<MTLDepthStencilStatePtr> state3d, state3dNoDepth;
     const auto& getState3D = [&](bool depth) -> const MTLDepthStencilStatePtr& {
         if (depth) {
             if (!state3d) {
-                const auto depthMode = gfx::DepthMode{.func = gfx::DepthFunctionType::GreaterEqual,
+                const auto depthMode = gfx::DepthMode{.func = standardDepthTwin
+                                                          ? gfx::DepthFunctionType::LessEqual
+                                                          : gfx::DepthFunctionType::GreaterEqual,
                                                       .mask = gfx::DepthMaskType::ReadWrite};
                 state3d = context.makeDepthStencilState(depthMode, gfx::StencilMode::disabled(), renderable);
             }
@@ -89,11 +95,12 @@ void LayerGroup::render(RenderOrchestrator&, PaintParameters& parameters) {
             tweaker->execute(drawable, parameters);
         }
 
-        // Restreint aux groupes « terrain » (surface principale) et « terrain-under » (sous-couche
-        // anti-fissures, même convention reversed-Z) : le jumeau « terrain-depth » rend dans sa
-        // propre cible (pack de profondeur en COULEUR, pas de remap reversed-Z, pas d'attache depth) —
-        // lui imposer cet état serait incorrect (et invalide côté Metal sans attache de profondeur).
-        if (drawable.getIs3D() && (getName() == "terrain" || getName() == "terrain-under")) {
+        // « terrain » et « terrain-under » : reversed-Z GreaterEqual. « terrain-depth » : LessEqual
+        // standard dans SA cible (attache de profondeur créée depth=true, clear 1.0) — sans état posé,
+        // le pack retenait la DERNIÈRE tuile dessinée au lieu de la plus proche → occlusion des
+        // symboles fausse derrière les crêtes (mesuré : pictos visibles à travers).
+        if (drawable.getIs3D() &&
+            (getName() == "terrain" || getName() == "terrain-under" || standardDepthTwin)) {
             renderPass.setDepthStencilState(getState3D(drawable.getEnableDepth()));
             // BIAIS DE PROFONDEUR PAR NIVEAU DE ZOOM : pendant la fenêtre où un parent (repli) et ses
             // enfants coexistent, leurs surfaces quasi-coplanaires se départagent PIXEL PAR PIXEL là où
@@ -101,7 +108,8 @@ void LayerGroup::render(RenderOrchestrator&, PaintParameters& parameters) {
             // derrière — mesuré). Reversed-Z (GreaterEqual) : un epsilon POSITIF par niveau met la tuile
             // la plus FINE devant, déterministiquement, sur les seuls quasi-ex-æquo (l'ordre réel des
             // vraies occlusions, à des mètres d'écart, n'est pas affecté).
-            const float levelBias = drawable.getTileID()
+            // (Sens inversé en LessEqual → pas de biais pour le jumeau depth : sans enjeu visuel là.)
+            const float levelBias = (!standardDepthTwin && drawable.getTileID())
                                         ? static_cast<float>(drawable.getTileID()->canonical.z)
                                         : 0.0f;
             renderPass.getMetalEncoder()->setDepthBias(levelBias * 2.0f, 0.0f, 0.0f);

@@ -216,8 +216,17 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     const float2 pos0 = projected_pos.xy / projected_pos.w;
     const float2 posOffset = a_offset * max(a_minFontScale, fontScale) / 32.0 + a_pxoffset / 16.0;
     const float4 position = drawable.coord_matrix * float4(pos0 + rotation_matrix * posOffset, z, 1.0);
-    // Fade out symbols hidden behind the terrain (see calculate_visibility)
-    const half vis = half(calculate_visibility(position, depthTexture, depthSampler, drawable.dem_enabled));
+    // Fade out symbols hidden behind the terrain (see calculate_visibility).
+    // Isomaps : comparer l'ANCRE projetee en espace carte (projectedPoint, elevation comprise) —
+    // « position » est le quad de glyphe dans le plan d'etiquette (z etranger a la scene) : aucune
+    // comparaison de profondeur n'y a de sens (mesure : sonde binaire, tout ou rien). gl-js idem.
+    // Ancre SURELEVEE de 40 m (exageres) pour le test : l'elevation des symboles vient du DEM du
+    // z14 vectoriel, LISSE vs la surface rendue (z16-18) — au sommet l'ancre est SOUS la crete
+    // fine, et en rasant l'ecart le long du rayon se compte en centaines de metres -> tout se
+    // masquait (mesure). +40 m redonnent l'avantage au sommet legitime sans devoiler ce qui est
+    // reellement derriere une crete (qui domine la ligne de visee de bien plus).
+    const float4 visPoint = projectedPoint + drawable.matrix * float4(0.0, 0.0, 40.0, 0.0);
+    const half vis = half(calculate_visibility(visPoint, depthTexture, depthSampler, drawable.dem_enabled));
 
     return {
         .position     = position,
@@ -406,8 +415,17 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     const float2 pos_rot = a_offset / 32.0 * fontScale + a_pxoffset;
     const float2 pos0 = projected_pos.xy / projected_pos.w + rotation_matrix * pos_rot;
     const float4 position = drawable.coord_matrix * float4(pos0, z, 1.0);
-    // Fade out symbols hidden behind the terrain (see calculate_visibility)
-    const half vis = half(calculate_visibility(position, depthTexture, depthSampler, drawable.dem_enabled));
+    // Fade out symbols hidden behind the terrain (see calculate_visibility).
+    // Isomaps : comparer l'ANCRE projetee en espace carte (projectedPoint, elevation comprise) —
+    // « position » est le quad de glyphe dans le plan d'etiquette (z etranger a la scene) : aucune
+    // comparaison de profondeur n'y a de sens (mesure : sonde binaire, tout ou rien). gl-js idem.
+    // Ancre SURELEVEE de 40 m (exageres) pour le test : l'elevation des symboles vient du DEM du
+    // z14 vectoriel, LISSE vs la surface rendue (z16-18) — au sommet l'ancre est SOUS la crete
+    // fine, et en rasant l'ecart le long du rayon se compte en centaines de metres -> tout se
+    // masquait (mesure). +40 m redonnent l'avantage au sommet legitime sans devoiler ce qui est
+    // reellement derriere une crete (qui domine la ligne de visee de bien plus).
+    const float4 visPoint = projectedPoint + drawable.matrix * float4(0.0, 0.0, 40.0, 0.0);
+    const half vis = half(calculate_visibility(visPoint, depthTexture, depthSampler, drawable.dem_enabled));
 
     return {
         .position     = position,
@@ -653,8 +671,17 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
     const float2 pos_rot = a_offset / 32.0 * fontScale;
     const float2 pos0 = projected_pos.xy / projected_pos.w + rotation_matrix * pos_rot;
     const float4 position = drawable.coord_matrix * float4(pos0, z, 1.0);
-    // Fade out symbols hidden behind the terrain (see calculate_visibility)
-    const half vis = half(calculate_visibility(position, depthTexture, depthSampler, drawable.dem_enabled));
+    // Fade out symbols hidden behind the terrain (see calculate_visibility).
+    // Isomaps : comparer l'ANCRE projetee en espace carte (projectedPoint, elevation comprise) —
+    // « position » est le quad de glyphe dans le plan d'etiquette (z etranger a la scene) : aucune
+    // comparaison de profondeur n'y a de sens (mesure : sonde binaire, tout ou rien). gl-js idem.
+    // Ancre SURELEVEE de 40 m (exageres) pour le test : l'elevation des symboles vient du DEM du
+    // z14 vectoriel, LISSE vs la surface rendue (z16-18) — au sommet l'ancre est SOUS la crete
+    // fine, et en rasant l'ecart le long du rayon se compte en centaines de metres -> tout se
+    // masquait (mesure). +40 m redonnent l'avantage au sommet legitime sans devoiler ce qui est
+    // reellement derriere une crete (qui domine la ligne de visee de bien plus).
+    const float4 visPoint = projectedPoint + drawable.matrix * float4(0.0, 0.0, 40.0, 0.0);
+    const half vis = half(calculate_visibility(visPoint, depthTexture, depthSampler, drawable.dem_enabled));
     const float gamma_scale = position.w;
     const bool is_icon = (is_sdf == ICON);
 

@@ -2336,6 +2336,10 @@ of north, the map will automatically snap to exact north.
  */
 - (double)isomapsEyeAltitudeASL;
 
+/// Isomaps DIAG : MTL::Texture* (id<MTLTexture> non retenu) du pack de profondeur terrain, ou NULL —
+/// overlay de calibration de l'occlusion des symboles dans l'app d'éval.
+- (void *)isomapsTerrainDepthTexture;
+
 /**
  Isomaps — hauteur de l'œil AU-DESSUS DU SOL (m) : altitude œil réelle − altitude du terrain sous l'œil.
  `NAN` si indisponible. Sert à afficher/vérifier l'anti-collision (doit rester ≥ seuil).

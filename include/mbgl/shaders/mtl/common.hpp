@@ -99,7 +99,11 @@ inline float get_elevation(float2 pos,
 // converted to NDC z, as in the maplibre-gl-js prelude
 inline float unpack_depth(float4 rgba_depth) {
     const float4 bit_shift = float4(1.0 / (256.0 * 256.0 * 256.0), 1.0 / (256.0 * 256.0), 1.0 / 256.0, 1.0);
-    return dot(rgba_depth, bit_shift) * 2.0 - 1.0;
+    // Isomaps : PAS de « *2-1 » (héritage gl-js, qui reconvertissait vers du NDC GL [-1,1]) — notre
+    // pack stocke le z FENETRE Metal [0,1] tel quel (terrain_depth remap z'=(z+w)/2). Le décalage
+    // résiduel (~2 % vers « plus proche » sur tout le terrain) masquait TOUS les symboles, +40 m
+    // d'ancre compris (mesuré — trouvé en construisant l'outil de visualisation du pack).
+    return dot(rgba_depth, bit_shift);
 }
 
 // Whether a clip-space position is visible in front of the terrain, from the
@@ -115,7 +119,18 @@ inline float calculate_visibility(float4 pos,
     }
     const float2 uv = pos.xy / pos.w * 0.5 + 0.5;
     const float depth = unpack_depth(depth_texture.sample(depth_sampler, float2(uv.x, 1.0 - uv.y)));
-    return pos.z / pos.w > depth ? 0.0 : 1.0;
+    // Isomaps : MEME espace que le pack (NDC standard [0,1], near->0 — le jumeau terrain-depth remappe
+    // z'=(z+w)/2). L'ancienne comparaison melangeait NDC GL [-1,1] cote symbole et z fenetre cote pack
+    // -> pictos visibles derriere les cretes. TOLERANCE RELATIVE : en z hyperbolique, (1-depth) est
+    // proportionnel a nearZ/distance — une tolerance FIXE est soit enorme soit nulle selon nearZ et la
+    // distance (0.005 puis 0.001 avalaient toute l'occlusion, mesure). (symZ-depth) > (1-depth)*0.02
+    // = « cache au-dela de ~2 % de la distance derriere la surface » (100 m a 5 km), invariant
+    // d'echelle, sans dependre du plan proche.
+    const float symZ = pos.z / pos.w * 0.5 + 0.5;
+    // Tolérance RELATIVE (z hyperbolique) : « caché au-delà de ~2 % de la distance derrière la
+    // surface » (100 m à 5 km), invariante d'échelle. L'ancre est en plus testée SURÉLEVÉE de 40 m
+    // côté shaders symboles (écart DEM z14 vectoriel vs surface z16-18).
+    return (symZ - depth) > (1.0 - depth) * 0.02 + 0.000001 ? 0.0 : 1.0;
 }
 
 template<class ForwardIt, class T>

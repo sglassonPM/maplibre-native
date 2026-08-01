@@ -67,6 +67,9 @@ public:
 
     /// DIAG isomaps : {terrain!=null, mesh tiles, render targets, terrainDraping, TileLayerGroups sautés}.
     std::array<int, 5> isomapsTerrainDebug() const;
+    /// Isomaps DIAG : MTL::Texture* du pack de profondeur terrain (nullptr sans terrain/passe) —
+    /// pour l'overlay de calibration de l'occlusion des symboles dans l'app d'éval.
+    void* isomapsTerrainDepthMTLTexture() const;
 
     AnnotationIDs queryPointAnnotations(const ScreenBox& box) const;
     AnnotationIDs queryShapeAnnotations(const ScreenBox& box) const;

@@ -672,6 +672,14 @@ public:
   return loc ? loc->altitude : NAN;
 }
 
+- (void *)isomapsTerrainDepthTexture {
+  if (!_rendererFrontend) {
+    return NULL;
+  }
+  mbgl::Renderer *renderer = _rendererFrontend->getRenderer();
+  return renderer ? renderer->isomapsTerrainDepthMTLTexture() : NULL;
+}
+
 - (double)isomapsEyeAltitudeAGL {
   if (!_mbglMap || !_rendererFrontend) {
     return NAN;

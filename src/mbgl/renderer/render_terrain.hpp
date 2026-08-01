@@ -238,6 +238,12 @@ public:
     /// orchestrator; rendered only by renderDepth)
     const LayerGroupBasePtr& getDepthLayerGroup() const { return depthLayerGroup; }
 
+    /// Isomaps DIAG : texture du pack de profondeur telle quelle (nullptr tant que la passe n'a pas
+    /// tourné) — exposée à l'app d'éval pour l'overlay de calibration de l'occlusion des symboles.
+    std::shared_ptr<gfx::Texture2D> isomapsDepthTexture() const {
+        return depthRenderTarget ? depthRenderTarget->getTexture() : nullptr;
+    }
+
     /**
      * @brief Get the terrain layer tweaker
      */

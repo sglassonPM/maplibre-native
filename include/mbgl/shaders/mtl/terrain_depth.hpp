@@ -48,8 +48,16 @@ FragmentStage vertex vertexMain(thread const VertexStage vertx [[stage_in]],
 
     // Skirt vertices drop below the surface by elevation_offset (gl-js u_ele_delta)
     const float ele_delta = (float(vertx.pos.z) == 1.0) ? props.elevation_offset : 0.0;
+    float4 position = drawable.matrix * float4(pos.x, pos.y, elevation - ele_delta, 1.0);
+    // Isomaps : remap GL [-w,w] -> Metal [0,w] STANDARD (near->0, far->1). Sans lui, Metal CLIPPE
+    // toute la moitie proche (z<0) -> pack ampute + comparaison symboles fausse (pictos visibles
+    // derriere les cretes, mesure). Convention STANDARD (pas reversed-Z) : le pack doit rester
+    // directement comparable au z NDC des symboles (calculate_visibility remappe pareillement cote
+    // symbole). Depth attach du jumeau : clear 1.0 + LessEqual. NB : PAS de lambda ici — le
+    // compilateur Metal RUNTIME du device les refuse (le xcrun desktop les accepte, piege).
+    position.z = 0.5 * (position.z + position.w);
     return {
-        .position = drawable.matrix * float4(pos.x, pos.y, elevation - ele_delta, 1.0),
+        .position = position,
     };
 }
 
