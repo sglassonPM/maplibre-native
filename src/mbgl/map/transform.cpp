@@ -909,6 +909,19 @@ void Transform::clampEyeAboveTerrain() {
     if (!terrainCollisionElevationFn || terrainCollisionMinAGL <= 0.0 || !state.valid()) {
         return;
     }
+    // Isomaps RAMPE DE PITCH AU DÉZOOM : sous ~zoom 7 la 3D inclinée perd son sens et multiplie les
+    // cas limites (vue planétaire pitchée : frustum immense, cover vide sous le minzoom du DEM —
+    // mesuré maillage=0 à zoom 2,2). Pitch max = 85° à zoom ≥ 7, décroissance linéaire, 0° sous 4,5.
+    // Appliquée en continu (displayLink) → au dézoom, le pitch s'aplatit PROGRESSIVEMENT en suivant
+    // le zoom du geste (petits décréments, jamais de saut — leçon des contraintes de geste).
+    // Re-zoomer ne restaure pas le pitch (comportement standard des cartes).
+    {
+        const double t = util::clamp((state.getZoom() - 4.5) / (7.0 - 4.5), 0.0, 1.0);
+        const double allowedPitchRad = t * util::deg2rad(85.0);
+        if (state.getPitch() > allowedPitchRad + 1e-4) {
+            state.setPitch(allowedPitchRad);
+        }
+    }
     // Position 3D de l'ŒIL (pas le centre du regard) : altitude ASL + point-sol sous l'œil.
     const FreeCameraOptions cam = state.getFreeCameraOptions();
     const std::optional<LatLngAltitude> loc = cam.getLocation();
