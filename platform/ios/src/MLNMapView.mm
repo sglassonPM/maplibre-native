@@ -717,6 +717,18 @@ public:
     mbgl::isomaps::setCinematicCamera(on);
 }
 
+- (void)isomapsSetFlyCameraCenter:(CLLocationCoordinate2D)center
+                        zoomLevel:(double)zoomLevel
+                        direction:(CLLocationDirection)direction
+                            pitch:(CGFloat)pitch {
+    self.mbglMap.jumpTo(mbgl::CameraOptions()
+                            .withCenter(mbgl::LatLng{center.latitude, center.longitude})
+                            .withZoom(zoomLevel)
+                            .withBearing(direction)
+                            .withPitch(pitch));
+    [self cameraIsChanging];
+}
+
 - (void)isomapsReduceMemoryUse {
   if (_rendererFrontend) {
     _rendererFrontend->reduceMemoryUse();

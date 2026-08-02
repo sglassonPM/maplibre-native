@@ -2356,6 +2356,17 @@ of north, the map will automatically snap to exact north.
 + (void)isomapsSetCinematicCamera:(BOOL)on;
 
 /**
+ Isomaps — pose caméra CINÉMATIQUE atomique (flyover) : centre + zoom + cap + pitch en un seul
+ jumpTo moteur, sans conversion d'altitude. À utiliser par frame pendant un survol piloté
+ (avec isomapsSetCinematicCamera:YES).
+ */
+- (void)isomapsSetFlyCameraCenter:(CLLocationCoordinate2D)center
+                        zoomLevel:(double)zoomLevel
+                        direction:(CLLocationDirection)direction
+                            pitch:(CGFloat)pitch
+    NS_SWIFT_NAME(isomapsSetFlyCamera(center:zoomLevel:direction:pitch:));
+
+/**
  Isomaps — hauteur de l'œil AU-DESSUS DU SOL (m) : altitude œil réelle − altitude du terrain sous l'œil.
  `NAN` si indisponible. Sert à afficher/vérifier l'anti-collision (doit rester ≥ seuil).
  */
