@@ -51,6 +51,17 @@ float getSymbolFadeWidthMeters() {
     return gSymbolFadeWidthM;
 }
 
+namespace {
+std::atomic<bool> gCinematicCamera{false};
+} // namespace
+
+void setCinematicCamera(bool on) {
+    gCinematicCamera = on;
+}
+bool isCinematicCamera() {
+    return gCinematicCamera;
+}
+
 } // namespace isomaps
 
 using namespace style;

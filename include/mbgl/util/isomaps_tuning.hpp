@@ -13,5 +13,11 @@ void setSymbolFade(float startMeters, float widthMeters);
 float getSymbolFadeStartMeters(); // <= 0 si non piloté
 float getSymbolFadeWidthMeters();
 
+// CAMÉRA CINÉMATIQUE (flyover) : suspend les contraintes INTERACTIVES du terrain — collision,
+// renormalisation AGL, rampe de pitch — et fige le plan de référence à 0. La caméra devient
+// purement pilotée par l'app (sémantique déterministe : zoom = hauteur d'œil ASL).
+void setCinematicCamera(bool on);
+bool isCinematicCamera();
+
 } // namespace isomaps
 } // namespace mbgl

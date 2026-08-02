@@ -1,4 +1,5 @@
 #include <mbgl/map/camera.hpp>
+#include <mbgl/util/isomaps_tuning.hpp>
 #include <mbgl/map/transform.hpp>
 #include <mbgl/util/constants.hpp>
 #include <mbgl/util/mat4.hpp>
@@ -787,6 +788,15 @@ void Transform::setTerrainCameraCollision(std::function<std::optional<double>(co
 }
 
 void Transform::renormalizeCenterAltitudeToTerrain() {
+    // Isomaps CINÉMATIQUE (flyover) : caméra pilotée par l'app, plan de référence FIGÉ à 0 —
+    // aucune renormalisation (le combat renorm/collision sur poses autorées donnait œil à 18 km
+    // et sondes fantômes refusées en boucle, constaté).
+    if (isomaps::isCinematicCamera()) {
+        if (state.getCenterAltitude() != 0.0) {
+            state.setCenterAltitude(0.0);
+        }
+        return;
+    }
     if (!terrainCollisionElevationFn || !state.valid() || isGestureInProgress()) {
         return; // jamais pendant un geste : la baseline du geste (zoom absolu du pinch) sauterait
     }
@@ -914,6 +924,9 @@ void Transform::renormalizeCenterAltitudeToTerrain() {
 }
 
 void Transform::clampEyeAboveTerrain() {
+    if (isomaps::isCinematicCamera()) {
+        return; // cinématique : ni collision ni rampe de pitch (poses autorées par l'app)
+    }
     if (!terrainCollisionElevationFn || terrainCollisionMinAGL <= 0.0 || !state.valid()) {
         return;
     }

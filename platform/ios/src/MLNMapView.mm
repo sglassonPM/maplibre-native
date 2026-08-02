@@ -713,6 +713,10 @@ public:
     mbgl::isomaps::setSymbolFade(static_cast<float>(startMeters), static_cast<float>(widthMeters));
 }
 
++ (void)isomapsSetCinematicCamera:(BOOL)on {
+    mbgl::isomaps::setCinematicCamera(on);
+}
+
 - (void)isomapsReduceMemoryUse {
   if (_rendererFrontend) {
     _rendererFrontend->reduceMemoryUse();

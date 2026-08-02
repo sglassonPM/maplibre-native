@@ -2349,6 +2349,13 @@ of north, the map will automatically snap to exact north.
 + (void)isomapsSetSymbolFadeStart:(double)startMeters width:(double)widthMeters;
 
 /**
+ Isomaps — caméra CINÉMATIQUE (flyover) : suspend collision terrain, renormalisation AGL et rampe
+ de pitch, et fige le plan de référence à 0 (zoom = hauteur d'œil au-dessus du niveau de la mer,
+ déterministe). À activer pendant un survol piloté par l'app, désactiver à la fin.
+ */
++ (void)isomapsSetCinematicCamera:(BOOL)on;
+
+/**
  Isomaps — hauteur de l'œil AU-DESSUS DU SOL (m) : altitude œil réelle − altitude du terrain sous l'œil.
  `NAN` si indisponible. Sert à afficher/vérifier l'anti-collision (doit rester ≥ seuil).
  */
