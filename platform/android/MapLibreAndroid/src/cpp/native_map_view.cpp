@@ -1586,7 +1586,9 @@ void NativeMapView::registerNative(jni::JNIEnv& env) {
     jni::RegisterNatives(env,
                          *javaClass,
                          jni::MakeNativeMethod<decltype(&NativeMapView::isomapsSetSymbolFade),
-                                               &NativeMapView::isomapsSetSymbolFade>("nativeIsomapsSetSymbolFade"));
+                                               &NativeMapView::isomapsSetSymbolFade>("nativeIsomapsSetSymbolFade"),
+                         jni::MakeNativeMethod<decltype(&NativeMapView::isomapsSetTerrainZoomCap),
+                                               &NativeMapView::isomapsSetTerrainZoomCap>("nativeIsomapsSetTerrainZoomCap"));
 }
 
 void NativeMapView::isomapsSetSymbolFade(jni::JNIEnv&,
@@ -1594,6 +1596,10 @@ void NativeMapView::isomapsSetSymbolFade(jni::JNIEnv&,
                                          jni::jfloat startMeters,
                                          jni::jfloat widthMeters) {
     mbgl::isomaps::setSymbolFade(static_cast<float>(startMeters), static_cast<float>(widthMeters));
+}
+
+void NativeMapView::isomapsSetTerrainZoomCap(jni::JNIEnv&, const jni::Class<NativeMapView>&, jni::jfloat maxZoom) {
+    mbgl::isomaps::setTerrainZoomCap(static_cast<float>(maxZoom));
 }
 
 void NativeMapView::onRegisterShaders(gfx::ShaderRegistry&) {};

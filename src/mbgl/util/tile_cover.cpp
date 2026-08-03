@@ -6,6 +6,7 @@
 #include <mbgl/util/tile_coordinate.hpp>
 #include <mbgl/util/tile_cover.hpp>
 #include <mbgl/util/tile_cover_impl.hpp>
+#include <mbgl/util/isomaps_tuning.hpp>
 #include <mbgl/util/logging.hpp>
 #include <mbgl/util/string.hpp>
 
@@ -211,6 +212,13 @@ std::vector<OverscaledTileID> tileCover(const TileCoverParameters& state,
         const double nominalCap = std::ceil(transform.getZoom()) + 2.0;
         if (static_cast<double>(maxZoom) > nominalCap) {
             maxZoom = static_cast<uint8_t>(std::max(0.0, nominalCap));
+        }
+        // Isomaps : PLAFOND ABSOLU PILOTÉ PAR L'APPAREIL (mémoire) — cf. isomaps_tuning.hpp.
+        // Posé par l'app (Android milieu de gamme) ; 0 = désactivé. Passe APRÈS le plafond
+        // nominal : c'est une borne dure, pas un raffinement.
+        const double deviceCap = static_cast<double>(isomaps::getTerrainZoomCap());
+        if (deviceCap > 0.0 && static_cast<double>(maxZoom) > deviceCap) {
+            maxZoom = static_cast<uint8_t>(std::max(0.0, deviceCap));
         }
     }
     // Isomaps : RÉFÉRENCE SOL STABLE pour le LOD terrain = altitude du terrain SOUS LA CAMÉRA (une seule

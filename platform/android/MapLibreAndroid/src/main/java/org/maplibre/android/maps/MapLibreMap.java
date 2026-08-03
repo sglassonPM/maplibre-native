@@ -114,6 +114,14 @@ public final class MapLibreMap {
   }
 
   /**
+   * Isomaps : plafond de zoom 3D piloté par la mémoire de l'appareil (voir
+   * {@link NativeMapView#nativeIsomapsSetTerrainZoomCap}). &lt;= 0 = désactivé.
+   */
+  public static void isomapsSetTerrainZoomCap(float maxZoom) {
+    NativeMapView.nativeIsomapsSetTerrainZoomCap(maxZoom);
+  }
+
+  /**
    * Query rendering statistics overlay status.
    */
   public boolean isRenderingStatsViewEnabled() {

@@ -56,6 +56,9 @@ public:
                                      jni::jfloat startMeters,
                                      jni::jfloat widthMeters);
 
+    // Isomaps : plafond de zoom 3D piloté par la mémoire de l'appareil (cf. isomaps_tuning.hpp).
+    static void isomapsSetTerrainZoomCap(jni::JNIEnv&, const jni::Class<NativeMapView>&, jni::jfloat maxZoom);
+
     NativeMapView(jni::JNIEnv&,
                   const jni::Object<NativeMapView>&,
                   const jni::Object<FileSource>&,

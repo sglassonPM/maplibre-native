@@ -13,6 +13,13 @@ void setSymbolFade(float startMeters, float widthMeters);
 float getSymbolFadeStartMeters(); // <= 0 si non piloté
 float getSymbolFadeWidthMeters();
 
+// PLAFOND DE ZOOM 3D PILOTÉ PAR L'APPAREIL : borne ABSOLUE sur le zoom des tuiles demandées par
+// le cover quand le terrain est actif (maillage + sources drapées). Posé par l'app selon la
+// mémoire du device (Android 4 Go → 14 ; 6-8 Go → 15-16 ; flagships → 0 = pas de plafond).
+// Filet contre les sources sans maxzoom. <= 0 = désactivé (comportement iOS inchangé).
+void setTerrainZoomCap(float maxZoom);
+float getTerrainZoomCap();
+
 // CAMÉRA CINÉMATIQUE (flyover) : suspend les contraintes INTERACTIVES du terrain — collision,
 // renormalisation AGL, rampe de pitch — et fige le plan de référence à 0. La caméra devient
 // purement pilotée par l'app (sémantique déterministe : zoom = hauteur d'œil ASL).

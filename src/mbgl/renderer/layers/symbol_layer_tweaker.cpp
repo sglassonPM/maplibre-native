@@ -52,6 +52,17 @@ float getSymbolFadeWidthMeters() {
 }
 
 namespace {
+std::atomic<float> gTerrainZoomCap{0.f}; // <= 0 = pas de plafond (cf. isomaps_tuning.hpp)
+} // namespace
+
+void setTerrainZoomCap(float maxZoom) {
+    gTerrainZoomCap = maxZoom;
+}
+float getTerrainZoomCap() {
+    return gTerrainZoomCap;
+}
+
+namespace {
 std::atomic<bool> gCinematicCamera{false};
 } // namespace
 

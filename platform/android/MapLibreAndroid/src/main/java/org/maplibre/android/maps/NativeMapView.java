@@ -1875,6 +1875,13 @@ final class NativeMapView implements NativeMap {
   @Keep
   public static native void nativeIsomapsSetSymbolFade(float startMeters, float widthMeters);
 
+  /**
+   * Isomaps : plafond ABSOLU de zoom des tuiles demandées en 3D (maillage + sources drapées) —
+   * à poser selon la mémoire de l'appareil (4 Go → 14 ; 6-8 Go → 15-16). &lt;= 0 = désactivé.
+   */
+  @Keep
+  public static native void nativeIsomapsSetTerrainZoomCap(float maxZoom);
+
   //
   // Snapshot
   //
