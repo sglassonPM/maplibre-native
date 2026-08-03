@@ -377,8 +377,11 @@ class CameraPosition
          * @param tilt Tilt value of the camera
          * @return this
          */
-        fun tilt(@FloatRange(from = MapLibreConstants.MINIMUM_TILT, to = MapLibreConstants.MAXIMUM_TILT) tilt: Double): Builder {
-            this.tilt = MathUtils.clamp(tilt, MapLibreConstants.MINIMUM_TILT, MapLibreConstants.MAXIMUM_TILT)
+        fun tilt(@FloatRange(from = MapLibreConstants.MINIMUM_TILT, to = MapLibreConstants.MAXIMUM_PITCH_LIMIT.toDouble()) tilt: Double): Builder {
+            // Isomaps : clamp à la LIMITE ABSOLUE (85, terrain 3D) et non à MAXIMUM_TILT (60) — la
+            // borne effective reste celle du moteur (60 par défaut, relevée par setMaxPitchPreference).
+            // Avant : tilt(80) était silencieusement replafonné à 60 AVANT d'atteindre le natif.
+            this.tilt = MathUtils.clamp(tilt, MapLibreConstants.MINIMUM_TILT, MapLibreConstants.MAXIMUM_PITCH_LIMIT.toDouble())
             return this
         }
 

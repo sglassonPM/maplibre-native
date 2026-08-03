@@ -8,7 +8,9 @@ import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
+import org.maplibre.android.style.layers.CustomLayer
 import org.maplibre.android.testapp.R
+import org.maplibre.android.testapp.model.customlayer.IsomapsSkyLayer
 
 /**
  * Isomaps : évaluation du terrain 3D avec le style de production (satellite +
@@ -29,16 +31,22 @@ class TerrainIsomapsActivity : AppCompatActivity() {
             maplibreMap = map
             // Laisser le geste d'inclinaison atteindre le pitch max supporté (85°)
             map.setMaxPitchPreference(MapLibreConstants.MAXIMUM_PITCH_LIMIT.toDouble())
-            map.cameraPosition = CameraPosition.Builder()
-                .target(LatLng(45.9237, 6.8694)) // Chamonix, face au massif du Mont-Blanc
-                .zoom(11.5)
-                .tilt(60.0)
-                .bearing(150.0)
-                .build()
             // Rideau d'extinction des étiquettes : mêmes valeurs que le dashboard iOS (6 km / 4 km)
             MapLibreMap.isomapsSetSymbolFade(6000f, 4000f)
             val json = assets.open("isomaps_terrain_style.json").bufferedReader().use { it.readText() }
-            map.setStyle(Style.Builder().fromJson(json))
+            map.setStyle(Style.Builder().fromJson(json)) { style ->
+                // Calque CIEL (dégradé + soleil + nuages) : au-dessus du background, sous le
+                // satellite — le terrain opaque le recouvre, il ne reste que là où rien n'est peint.
+                style.addLayerBelow(CustomLayer("isomaps-sky", IsomapsSkyLayer.createContext()), "satellite-raster")
+                // Pose APRÈS le chargement du style : posée avant, le pitch était replafonné à 60
+                // (la préférence 85 ne s'applique pas encore à la caméra initiale).
+                map.cameraPosition = CameraPosition.Builder()
+                    .target(LatLng(45.9237, 6.8694)) // Chamonix, face au massif du Mont-Blanc
+                    .zoom(11.5)
+                    .tilt(80.0)
+                    .bearing(150.0)
+                    .build()
+            }
         }
     }
 

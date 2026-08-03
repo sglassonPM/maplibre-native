@@ -84,6 +84,7 @@ android {
                 cmake {
                     arguments += "-DMLN_WITH_OPENGL=ON"
                     targets += "example-custom-layer"
+                    targets += "isomaps-sky-layer"
                 }
             }
         }

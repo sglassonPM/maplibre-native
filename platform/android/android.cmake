@@ -142,6 +142,26 @@ target_link_libraries(
         mbgl-compiler-options
 )
 
+# Isomaps : calque CIEL (port GLES du calque Metal de l'app d'éval iOS)
+add_library(
+    isomaps-sky-layer MODULE
+    ${PROJECT_SOURCE_DIR}/platform/android/src/isomaps_sky_layer.cpp
+)
+
+target_include_directories(
+    isomaps-sky-layer
+    PRIVATE ${PROJECT_SOURCE_DIR}/include
+)
+
+target_link_libraries(
+    isomaps-sky-layer
+    PRIVATE
+        GLESv3
+        MapLibreNative::Base
+        log
+        mbgl-compiler-options
+)
+
 if(MLN_WITH_VULKAN)
     add_library(
         example-vulkan-custom-layer MODULE
