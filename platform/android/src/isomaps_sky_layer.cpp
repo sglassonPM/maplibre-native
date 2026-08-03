@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <memory>
+#include <vector>
 
 namespace {
 
@@ -101,6 +102,44 @@ void main() {
 }
 )GLSL";
 
+// Variante IMAGE (port de skyFragmentImage Metal) : panorama équirectangulaire, soleil
+// pré-recalé au CENTRE de l'image = plein SUD. u = azimut (sud -> 0,5), v = élévation
+// (+90° -> 0). Sous/près de l'horizon : fondu vers la teinte de brume du terrain.
+const GLchar *kFragmentImageSource = R"GLSL(#version 300 es
+precision highp float;
+in vec2 v_ndc;
+out vec4 fragColor;
+
+uniform float u_pitch;
+uniform float u_bearing;
+uniform float u_tanHalfFov;
+uniform float u_aspect;
+uniform sampler2D u_sky;
+
+void main() {
+    float sp = sin(u_pitch), cp = cos(u_pitch);
+    float sb = sin(u_bearing), cb = cos(u_bearing);
+    vec3 fwd = vec3(sb * sp, cb * sp, -cp);
+    vec3 up  = vec3(sb * cp, cb * cp,  sp);
+    vec3 rt  = vec3(cb, -sb, 0.0);
+    vec3 ray = normalize(fwd + v_ndc.x * u_tanHalfFov * u_aspect * rt + v_ndc.y * u_tanHalfFov * up);
+
+    vec3 fogC = vec3(0.72, 0.78, 0.84); // MÊME teinte que la brume du shader terrain
+    float az = atan(ray.x, ray.y);      // 0 = nord, pi = sud
+    float uu = fract((az - 3.14159265) / (2.0 * 3.14159265) + 0.5); // plein sud -> u = 0,5 (soleil)
+    float vv = clamp(0.5 - asin(clamp(ray.z, -1.0, 1.0)) / 3.14159265, 0.0, 1.0);
+    vec3 img = texture(u_sky, vec2(uu, vv)).rgb;
+    // Raccord : fondu vers la brume sous/près de l'horizon (le sol de l'image ne sert jamais)
+    float sky = smoothstep(-0.01, 0.10, ray.z);
+    fragColor = vec4(mix(fogC, img, sky), 1.0);
+}
+)GLSL";
+
+// Panorama poussé par le Kotlin (BitmapFactory) AVANT la création du contexte — RGBA8.
+std::vector<uint8_t> gPanoramaPixels;
+int gPanoramaWidth = 0;
+int gPanoramaHeight = 0;
+
 GLuint compileShader(GLenum type, const GLchar *source) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);
@@ -122,9 +161,22 @@ public:
     ~IsomapsSkyLayer() override = default;
 
     void initialize(const mbgl::style::CustomLayerInitParameters &) override {
+        // Panorama iOS présent (poussé par le Kotlin) ? -> variante IMAGE, sinon procédural.
+        if (!gPanoramaPixels.empty() && gPanoramaWidth > 0 && gPanoramaHeight > 0) {
+            glGenTextures(1, &skyTexture);
+            glBindTexture(GL_TEXTURE_2D, skyTexture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, gPanoramaWidth, gPanoramaHeight, 0, GL_RGBA,
+                         GL_UNSIGNED_BYTE, gPanoramaPixels.data());
+            glGenerateMipmap(GL_TEXTURE_2D);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);        // u = azimut, boucle
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE); // v = élévation
+            glBindTexture(GL_TEXTURE_2D, 0);
+        }
         program = glCreateProgram();
         vertexShader = compileShader(GL_VERTEX_SHADER, kVertexSource);
-        fragmentShader = compileShader(GL_FRAGMENT_SHADER, kFragmentSource);
+        fragmentShader = compileShader(GL_FRAGMENT_SHADER, skyTexture ? kFragmentImageSource : kFragmentSource);
         if (!vertexShader || !fragmentShader) {
             return;
         }
@@ -139,13 +191,14 @@ public:
             __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "🌤 CIEL : erreur link : %s", log);
             return;
         }
+        uSky = glGetUniformLocation(program, "u_sky");
         uPitch = glGetUniformLocation(program, "u_pitch");
         uBearing = glGetUniformLocation(program, "u_bearing");
         uTanHalfFov = glGetUniformLocation(program, "u_tanHalfFov");
         uAspect = glGetUniformLocation(program, "u_aspect");
         glGenVertexArrays(1, &vao);
         ready = true;
-        __android_log_write(ANDROID_LOG_INFO, LOG_TAG, "🌤 CIEL : pipeline prêt (procédural)");
+        __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "🌤 CIEL : pipeline prêt (%s)", skyTexture ? "image" : "procédural");
     }
 
     void render(const mbgl::style::CustomLayerRenderParameters &params) override {
@@ -160,6 +213,11 @@ public:
         glUniform1f(uBearing, bearingRad);
         glUniform1f(uTanHalfFov, static_cast<float>(std::tan(params.fieldOfView * 0.5)));
         glUniform1f(uAspect, static_cast<float>(params.width / std::max(params.height, 1.0)));
+        if (skyTexture) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, skyTexture);
+            glUniform1i(uSky, 0);
+        }
 
         // Test de profondeur SANS écriture, ciel au plan lointain : ne peint que le vide (le
         // terrain, rendu avant dans sa propre passe, a déjà écrit sa profondeur).
@@ -184,6 +242,10 @@ public:
             glDeleteProgram(program);
             glDeleteVertexArrays(1, &vao);
         }
+        if (skyTexture) {
+            glDeleteTextures(1, &skyTexture);
+            skyTexture = 0;
+        }
         ready = false;
     }
 
@@ -192,9 +254,23 @@ private:
     GLuint vertexShader = 0;
     GLuint fragmentShader = 0;
     GLuint vao = 0;
-    GLint uPitch = -1, uBearing = -1, uTanHalfFov = -1, uAspect = -1;
+    GLuint skyTexture = 0;
+    GLint uPitch = -1, uBearing = -1, uTanHalfFov = -1, uAspect = -1, uSky = -1;
     bool ready = false;
 };
+
+void JNICALL nativeSetPanorama(JNIEnv *env, jobject, jobject buffer, jint width, jint height) {
+    auto *data = static_cast<uint8_t *>(env->GetDirectBufferAddress(buffer));
+    const jlong capacity = env->GetDirectBufferCapacity(buffer);
+    if (!data || capacity < jlong(width) * height * 4) {
+        __android_log_write(ANDROID_LOG_ERROR, LOG_TAG, "🌤 CIEL : panorama invalide (buffer)");
+        return;
+    }
+    gPanoramaPixels.assign(data, data + size_t(width) * height * 4);
+    gPanoramaWidth = width;
+    gPanoramaHeight = height;
+    __android_log_print(ANDROID_LOG_INFO, LOG_TAG, "🌤 CIEL : panorama %dx%d reçu", width, height);
+}
 
 jlong JNICALL nativeCreateContext(JNIEnv *, jobject) {
     auto layer = std::make_unique<IsomapsSkyLayer>();
@@ -207,8 +283,10 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *) {
     JNIEnv *env = nullptr;
     vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
     jclass cls = env->FindClass("org/maplibre/android/testapp/model/customlayer/IsomapsSkyLayer");
-    JNINativeMethod methods[] = {{"createContext", "()J", reinterpret_cast<void *>(&nativeCreateContext)}};
-    if (env->RegisterNatives(cls, methods, 1) < 0) {
+    JNINativeMethod methods[] = {
+        {"createContext", "()J", reinterpret_cast<void *>(&nativeCreateContext)},
+        {"setPanorama", "(Ljava/nio/ByteBuffer;II)V", reinterpret_cast<void *>(&nativeSetPanorama)}};
+    if (env->RegisterNatives(cls, methods, 2) < 0) {
         env->ExceptionDescribe();
         return JNI_ERR;
     }

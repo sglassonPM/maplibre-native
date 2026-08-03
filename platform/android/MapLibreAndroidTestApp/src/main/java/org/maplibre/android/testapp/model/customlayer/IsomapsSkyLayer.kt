@@ -13,4 +13,7 @@ object IsomapsSkyLayer {
     }
 
     external fun createContext(): Long
+
+    /** Panorama équirect RGBA8 (soleil pré-recalé au centre = sud) — à pousser AVANT createContext. */
+    external fun setPanorama(pixels: java.nio.ByteBuffer, width: Int, height: Int)
 }

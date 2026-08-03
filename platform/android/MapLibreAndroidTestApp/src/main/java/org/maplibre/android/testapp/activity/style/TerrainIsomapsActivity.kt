@@ -35,8 +35,24 @@ class TerrainIsomapsActivity : AppCompatActivity() {
             MapLibreMap.isomapsSetSymbolFade(6000f, 4000f)
             val json = assets.open("isomaps_terrain_style.json").bufferedReader().use { it.readText() }
             map.setStyle(Style.Builder().fromJson(json)) { style ->
-                // Calque CIEL (dégradé + soleil + nuages) : au-dessus du background, sous le
-                // satellite — le terrain opaque le recouvre, il ne reste que là où rien n'est peint.
+                // Calque CIEL : la MÊME image panoramique qu'iOS (isomaps_sky.jpg, soleil recalé
+                // plein sud), poussée au natif avant la création — repli procédural si absente.
+                try {
+                    assets.open("isomaps_sky.jpg").use { input ->
+                        val bmp = android.graphics.BitmapFactory.decodeStream(input)
+                        if (bmp != null) {
+                            val rgba = if (bmp.config == android.graphics.Bitmap.Config.ARGB_8888) bmp
+                                       else bmp.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+                            val buf = java.nio.ByteBuffer.allocateDirect(rgba.byteCount)
+                            rgba.copyPixelsToBuffer(buf)
+                            IsomapsSkyLayer.setPanorama(buf, rgba.width, rgba.height)
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("IsomapsSkyLayer", "panorama absent, ciel procédural", e)
+                }
+                // Au-dessus du background, sous le satellite — le terrain opaque le recouvre,
+                // il ne reste que là où rien n'est peint.
                 style.addLayerBelow(CustomLayer("isomaps-sky", IsomapsSkyLayer.createContext()), "satellite-raster")
                 // Pose APRÈS le chargement du style : posée avant, le pitch était replafonné à 60
                 // (la préférence 85 ne s'applique pas encore à la caméra initiale).
