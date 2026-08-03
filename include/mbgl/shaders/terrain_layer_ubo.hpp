@@ -37,7 +37,10 @@ struct alignas(16) TerrainEvaluatedPropsUBO {
     /*  0 */ std::array<float, 4> unpack; // DEM unpack vector for the source's encoding
     /* 16 */ float exaggeration;
     /* 20 */ float elevation_offset;
-    /* 24 */ float pad1;
+    /* 24 */ float basemap_direct; // Isomaps : 1 = mode basemap direct (u_map = tuile raster uploadée,
+                                   // remap d'ancêtre, overlay drapé par-dessus) ; 0 = drapage RTT
+                                   // classique. Le shader GL en a besoin pour choisir le flip Y
+                                   // (une cible RTT est inversée en OpenGL, une texture uploadée non).
     /* 28 */ float pad2;
     /* 32 */
 };

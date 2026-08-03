@@ -50,7 +50,7 @@ void TerrainLayerTweaker::execute(LayerGroupBase& layerGroup, const PaintParamet
     const TerrainEvaluatedPropsUBO propsUBO = {.unpack = terrain->getDEMUnpackVector(),
                                                .exaggeration = exaggeration,
                                                .elevation_offset = elevationOffset,
-                                               .pad1 = 0.0f,
+                                               .basemap_direct = terrain->hasDirectBasemap() ? 1.0f : 0.0f,
                                                .pad2 = 0.0f};
     layerUniforms.createOrUpdate(idTerrainEvaluatedPropsUBO, &propsUBO, context);
 
