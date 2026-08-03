@@ -1182,7 +1182,8 @@ final class NativeMapView implements NativeMap {
     if (terrain == null) {
       nativeRemoveTerrain();
     } else {
-      nativeSetTerrain(terrain.getSource(), terrain.getExaggeration());
+      nativeSetTerrain(terrain.getSource(), terrain.getExaggeration(),
+          terrain.getBasemap() != null ? terrain.getBasemap() : "");
     }
   }
 
@@ -1794,7 +1795,7 @@ final class NativeMapView implements NativeMap {
   private native Light nativeGetLight();
 
   @Keep
-  private native void nativeSetTerrain(String sourceId, float exaggeration);
+  private native void nativeSetTerrain(String sourceId, float exaggeration, String basemapSourceId);
 
   @Keep
   private native void nativeRemoveTerrain();

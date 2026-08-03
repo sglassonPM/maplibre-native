@@ -16,19 +16,26 @@ package org.maplibre.android.style.terrain
  */
 class Terrain @JvmOverloads constructor(
     val source: String,
-    val exaggeration: Float = 1.0f
+    val exaggeration: Float = 1.0f,
+    /**
+     * Isomaps — mode « basemap direct » : id d'une source RASTER du style que le maillage terrain
+     * échantillonne DIRECTEMENT (façon Mapbox), au lieu du drapage render-to-texture. Net à tous
+     * les zooms ; les couches vectorielles restent drapées par-dessus (overlay). null = drapage
+     * classique.
+     */
+    val basemap: String? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is Terrain) return false
-        return source == other.source && exaggeration == other.exaggeration
+        return source == other.source && exaggeration == other.exaggeration && basemap == other.basemap
     }
 
     override fun hashCode(): Int {
-        return 31 * source.hashCode() + exaggeration.hashCode()
+        return (31 * source.hashCode() + exaggeration.hashCode()) * 31 + (basemap?.hashCode() ?: 0)
     }
 
     override fun toString(): String {
-        return "Terrain{source=$source, exaggeration=$exaggeration}"
+        return "Terrain{source=$source, exaggeration=$exaggeration, basemap=$basemap}"
     }
 }

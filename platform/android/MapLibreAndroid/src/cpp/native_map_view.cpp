@@ -1105,9 +1105,18 @@ jni::Local<jni::Object<Light>> NativeMapView::getLight(JNIEnv& env) {
     }
 }
 
-void NativeMapView::setTerrain(JNIEnv& env, const jni::String& sourceId, jni::jfloat exaggeration) {
-    map->getStyle().setTerrain(
-        std::make_unique<mbgl::style::Terrain>(jni::Make<std::string>(env, sourceId), exaggeration));
+void NativeMapView::setTerrain(JNIEnv& env,
+                               const jni::String& sourceId,
+                               jni::jfloat exaggeration,
+                               const jni::String& basemapSourceId) {
+    auto terrain = std::make_unique<mbgl::style::Terrain>(jni::Make<std::string>(env, sourceId), exaggeration);
+    // Isomaps : mode basemap direct ("" = drapage classique). Posé AVANT l'attache au style —
+    // l'observer est encore null, setBasemapSource ne notifie pas (voulu, cf. terrain.cpp).
+    const std::string basemap = jni::Make<std::string>(env, basemapSourceId);
+    if (!basemap.empty()) {
+        terrain->setBasemapSource(basemap);
+    }
+    map->getStyle().setTerrain(std::move(terrain));
 }
 
 void NativeMapView::removeTerrain(JNIEnv&) {
