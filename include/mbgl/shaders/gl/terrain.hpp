@@ -8,10 +8,10 @@ namespace shaders {
 template <>
 struct ShaderSource<BuiltIn::TerrainShader, gfx::Backend::Type::OpenGL> {
     static constexpr const char* name = "TerrainShader";
-    static constexpr const char* vertex = R"(out vec2 v_uv;
-out vec2 v_tile_uv;
-out float v_fog_dist;
-out float v_fog_start;
+    static constexpr const char* vertex = R"(out highp vec2 v_uv;
+out highp vec2 v_tile_uv;
+out highp float v_fog_t; // progression de brume 0..1+ (normalisee au VERTEX : une distance en
+                         // METRES en varying mediump sature a ~65 km -> frontiere nette, vecu)
 out float v_skirt;
 
 layout (std140) uniform TerrainDrawableUBO {
@@ -88,18 +88,18 @@ void main() {
     float ele_delta = (a_pos.z == 1.0) ? u_elevation_offset * skirtFactor * u_exaggeration : 0.0;
     v_skirt = ele_delta;
 
-    // Isomaps BRUME : distance horizontale reelle (metres) du sommet a la camera (repere local tuile).
-    v_fog_dist = length(pos - u_fog_params.xy) * u_fog_params.z;
-    v_fog_start = u_fog_params.w;
+    // Isomaps BRUME : distance horizontale reelle (metres) du sommet a la camera (repere local
+    // tuile), normalisee ICI en progression (fog_start puis largeur 47 km) — le vertex est highp.
+    float fogDist = length(pos - u_fog_params.xy) * u_fog_params.z;
+    v_fog_t = (fogDist - u_fog_params.w) / 47000.0;
 
     // NB : pas de remap reversed-Z ici — propre a Metal (profondeur [0,1] inversee + GreaterEqual).
     gl_Position = u_matrix * vec4(pos.x, pos.y, elevation - ele_delta, 1.0);
 }
 )";
-    static constexpr const char* fragment = R"(in vec2 v_uv;
-in vec2 v_tile_uv;
-in float v_fog_dist;
-in float v_fog_start;
+    static constexpr const char* fragment = R"(in highp vec2 v_uv;
+in highp vec2 v_tile_uv;
+in highp float v_fog_t;
 in float v_skirt;
 
 layout (std140) uniform TerrainEvaluatedPropsUBO {
@@ -129,9 +129,8 @@ void main() {
     }
 
     // Isomaps BRUME atmospherique (parite Metal) : nette jusqu'a ~fogStart, fondu quadratique,
-    // plafonnee pour garder les silhouettes lointaines.
-    float fogEnd = v_fog_start + 47000.0;
-    float f = clamp((v_fog_dist - v_fog_start) / (fogEnd - v_fog_start), 0.0, 1.0);
+    // plafonnee pour garder les silhouettes lointaines. v_fog_t deja normalise au vertex.
+    float f = clamp(v_fog_t, 0.0, 1.0);
     f = f * f * 0.85;
     vec3 rgb = mix(tex.rgb, vec3(0.72, 0.78, 0.84), f);
 

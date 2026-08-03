@@ -154,8 +154,19 @@ float calculate_visibility(vec4 pos, sampler2D depth_texture, float depth_enable
         return 1.0;
     }
     vec2 uv = pos.xy / pos.w * 0.5 + 0.5;
-    float depth = unpack_depth(texture(depth_texture, uv));
-    return pos.z / pos.w > depth ? 0.0 : 1.0;
+    // unpack_depth renvoie du NDC [-1,1] (convention gl-js) mais le pack ecrit du z FENETRE
+    // (gl_FragCoord.z, 0..1) : on reconvertit pour comparer fenetre contre fenetre.
+    highp float depth = unpack_depth(texture(depth_texture, uv)) * 0.5 + 0.5;
+    if (depth <= 0.0) {
+        return 1.0; // pack jamais rendu / hors cadre (0 exact = pas une profondeur legitime)
+    }
+    // Isomaps : MEME espace que le pack (z FENETRE 0..1 = gl_FragCoord.z du jumeau terrain-depth).
+    // L'ancienne comparaison melangeait NDC [-1,1] cote symbole et z fenetre cote pack -> pictos
+    // visibles derriere les cretes (meme bug que Metal, corrige a l'identique). TOLERANCE RELATIVE
+    // (z hyperbolique) : « cache au-dela de ~2 % de la distance derriere la surface » (100 m a
+    // 5 km), invariante d'echelle, sans dependre du plan proche.
+    highp float symZ = pos.z / pos.w * 0.5 + 0.5;
+    return (symZ - depth) > (1.0 - depth) * 0.02 + 0.000001 ? 0.0 : 1.0;
 }
 )";
     static constexpr const char* fragment = R"(#ifdef GL_ES

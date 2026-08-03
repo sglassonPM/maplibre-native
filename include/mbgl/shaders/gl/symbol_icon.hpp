@@ -159,12 +159,19 @@ lowp float opacity = u_opacity;
     vec2 fade_opacity = unpack_opacity(a_fade_opacity);
     float fade_change = fade_opacity[1] > 0.5 ? u_symbol_fade_change : -u_symbol_fade_change;
     v_fade_opacity = max(0.0, min(1.0, fade_opacity[0] + fade_change));
-    v_fade_opacity *= calculate_visibility(gl_Position, u_depth, u_dem_enabled);
+    // Isomaps : ancre SURELEVEE de 40 m (exageres) pour le test d'occlusion — l'elevation des
+    // symboles vient du DEM z14 vectoriel LISSE vs la surface rendue (z16-18) ; sans ce biais,
+    // tout se masquait au sommet (mesure sur Metal, meme remede).
+    vec4 isomapsVisPoint = projectedPoint + u_matrix * vec4(0.0, 0.0, 40.0, 0.0);
+    v_fade_opacity *= calculate_visibility(isomapsVisPoint, u_depth, u_dem_enabled);
     // Isomaps BRUME symboles : meme loi que le voile du terrain (fog_start puis +47 km), mais
     // extinction TOTALE au voile plein (le terrain garde des silhouettes, pas les etiquettes).
     // u_fog_m_per_unit = 0 (pas de terrain / screen-space) => keep = 1, inactif.
+    // Largeur du rideau portee par u_dem_coords.w (slot inutilise par elevation(), pilotable par
+    // l'app via isomaps::setSymbolFade — 6000/4000 en standard dashboard).
     float isomapsFogKeep = 1.0 -
-        clamp((length(a_pos - vec2(u_fog_cam_x, u_fog_cam_y)) * u_fog_m_per_unit - u_fog_start) / 47000.0,
+        clamp((length(a_pos - vec2(u_fog_cam_x, u_fog_cam_y)) * u_fog_m_per_unit - u_fog_start) /
+                  max(u_dem_coords.w, 1.0),
               0.0, 1.0);
     v_fade_opacity *= isomapsFogKeep;
 }
