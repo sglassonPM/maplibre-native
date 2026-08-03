@@ -59,6 +59,14 @@ public:
     // Isomaps : plafond de zoom 3D piloté par la mémoire de l'appareil (cf. isomaps_tuning.hpp).
     static void isomapsSetTerrainZoomCap(jni::JNIEnv&, const jni::Class<NativeMapView>&, jni::jfloat maxZoom);
 
+    // Isomaps : calque CIEL (cf. isomaps_sky_host.hpp) — création du host et panorama.
+    static jni::jlong isomapsCreateSkyLayer(jni::JNIEnv&, const jni::Class<NativeMapView>&);
+    static void isomapsSetSkyPanorama(jni::JNIEnv&,
+                                      const jni::Class<NativeMapView>&,
+                                      const jni::Object<>& buffer,
+                                      jni::jint width,
+                                      jni::jint height);
+
     NativeMapView(jni::JNIEnv&,
                   const jni::Object<NativeMapView>&,
                   const jni::Object<FileSource>&,

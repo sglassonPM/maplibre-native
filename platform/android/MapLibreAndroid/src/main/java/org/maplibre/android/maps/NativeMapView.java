@@ -1882,6 +1882,16 @@ final class NativeMapView implements NativeMap {
   @Keep
   public static native void nativeIsomapsSetTerrainZoomCap(float maxZoom);
 
+  /** Isomaps : crée le host natif du calque CIEL (à passer à CustomLayer). */
+  @Keep
+  public static native long nativeIsomapsCreateSkyLayer();
+
+  /** Isomaps : panorama équirect RGBA8 du ciel (DirectByteBuffer) — AVANT nativeIsomapsCreateSkyLayer. */
+  @Keep
+  // Objet (et non ByteBuffer) : jni::Object<> côté C++ = descripteur java/lang/Object —
+  // un ByteBuffer déclaré ici ferait échouer RegisterNatives (abort au chargement, vécu).
+  public static native void nativeIsomapsSetSkyPanorama(Object pixels, int width, int height);
+
   //
   // Snapshot
   //

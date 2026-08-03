@@ -121,6 +121,16 @@ public final class MapLibreMap {
     NativeMapView.nativeIsomapsSetTerrainZoomCap(maxZoom);
   }
 
+  /** Isomaps : host natif du calque CIEL — {@code new CustomLayer("isomaps-sky", isomapsCreateSkyLayer())}. */
+  public static long isomapsCreateSkyLayer() {
+    return NativeMapView.nativeIsomapsCreateSkyLayer();
+  }
+
+  /** Isomaps : panorama équirect RGBA8 du ciel (DirectByteBuffer) — à pousser AVANT la création. */
+  public static void isomapsSetSkyPanorama(java.nio.ByteBuffer pixels, int width, int height) {
+    NativeMapView.nativeIsomapsSetSkyPanorama(pixels, width, height);
+  }
+
   /**
    * Query rendering statistics overlay status.
    */

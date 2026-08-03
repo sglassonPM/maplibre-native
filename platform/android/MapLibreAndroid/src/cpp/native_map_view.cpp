@@ -16,6 +16,7 @@
 #include <mbgl/map/map.hpp>
 #include <mbgl/map/map_options.hpp>
 #include <mbgl/util/isomaps_tuning.hpp>
+#include "isomaps_sky_host.hpp"
 #include <mbgl/math/minmax.hpp>
 #include <mbgl/util/action_journal.hpp>
 #include <mbgl/util/constants.hpp>
@@ -1588,7 +1589,11 @@ void NativeMapView::registerNative(jni::JNIEnv& env) {
                          jni::MakeNativeMethod<decltype(&NativeMapView::isomapsSetSymbolFade),
                                                &NativeMapView::isomapsSetSymbolFade>("nativeIsomapsSetSymbolFade"),
                          jni::MakeNativeMethod<decltype(&NativeMapView::isomapsSetTerrainZoomCap),
-                                               &NativeMapView::isomapsSetTerrainZoomCap>("nativeIsomapsSetTerrainZoomCap"));
+                                               &NativeMapView::isomapsSetTerrainZoomCap>("nativeIsomapsSetTerrainZoomCap"),
+                         jni::MakeNativeMethod<decltype(&NativeMapView::isomapsCreateSkyLayer),
+                                               &NativeMapView::isomapsCreateSkyLayer>("nativeIsomapsCreateSkyLayer"),
+                         jni::MakeNativeMethod<decltype(&NativeMapView::isomapsSetSkyPanorama),
+                                               &NativeMapView::isomapsSetSkyPanorama>("nativeIsomapsSetSkyPanorama"));
 }
 
 void NativeMapView::isomapsSetSymbolFade(jni::JNIEnv&,
@@ -1600,6 +1605,23 @@ void NativeMapView::isomapsSetSymbolFade(jni::JNIEnv&,
 
 void NativeMapView::isomapsSetTerrainZoomCap(jni::JNIEnv&, const jni::Class<NativeMapView>&, jni::jfloat maxZoom) {
     mbgl::isomaps::setTerrainZoomCap(static_cast<float>(maxZoom));
+}
+
+jni::jlong NativeMapView::isomapsCreateSkyLayer(jni::JNIEnv&, const jni::Class<NativeMapView>&) {
+    return mbgl::android::isomaps_sky::createContext();
+}
+
+void NativeMapView::isomapsSetSkyPanorama(jni::JNIEnv& env,
+                                          const jni::Class<NativeMapView>&,
+                                          const jni::Object<>& buffer,
+                                          jni::jint width,
+                                          jni::jint height) {
+    auto* data = static_cast<uint8_t*>(env.GetDirectBufferAddress(jni::Unwrap(buffer.get())));
+    const jlong capacity = env.GetDirectBufferCapacity(jni::Unwrap(buffer.get()));
+    if (!data || capacity < jlong(width) * height * 4) {
+        return;
+    }
+    mbgl::android::isomaps_sky::storePanorama(data, width, height);
 }
 
 void NativeMapView::onRegisterShaders(gfx::ShaderRegistry&) {};
