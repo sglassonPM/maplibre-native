@@ -104,6 +104,16 @@ public final class MapLibreMap {
   }
 
   /**
+   * Isomaps : rideau d'extinction des étiquettes en 3D (mètres) — réglage GLOBAL, parité de l'API iOS
+   * {@code +[MLNMapView isomapsSetSymbolFadeStart:width:]}. Les étiquettes sont nettes jusqu'à
+   * max(startMeters, 2 × altitude caméra) puis s'éteignent linéairement sur widthMeters.
+   * startMeters &lt;= 0 restaure la loi par défaut (8 km / 47 km). L'app pousse 6000/4000 en standard.
+   */
+  public static void isomapsSetSymbolFade(float startMeters, float widthMeters) {
+    NativeMapView.nativeIsomapsSetSymbolFade(startMeters, widthMeters);
+  }
+
+  /**
    * Query rendering statistics overlay status.
    */
   public boolean isRenderingStatsViewEnabled() {

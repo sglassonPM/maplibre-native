@@ -48,6 +48,14 @@ public:
 
     static void registerNative(jni::JNIEnv&);
 
+    // Isomaps : rideau d'extinction des étiquettes en 3D (mètres) — réglage GLOBAL (isomaps_tuning),
+    // parité de l'API iOS +[MLNMapView isomapsSetSymbolFadeStart:width:]. startMeters <= 0 restaure
+    // la loi par défaut (8 km / 47 km). L'app isomaps pousse 6000/4000 en rideau standard.
+    static void isomapsSetSymbolFade(jni::JNIEnv&,
+                                     const jni::Class<NativeMapView>&,
+                                     jni::jfloat startMeters,
+                                     jni::jfloat widthMeters);
+
     NativeMapView(jni::JNIEnv&,
                   const jni::Object<NativeMapView>&,
                   const jni::Object<FileSource>&,

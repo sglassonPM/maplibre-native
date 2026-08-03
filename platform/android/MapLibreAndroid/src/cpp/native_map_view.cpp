@@ -15,6 +15,7 @@
 
 #include <mbgl/map/map.hpp>
 #include <mbgl/map/map_options.hpp>
+#include <mbgl/util/isomaps_tuning.hpp>
 #include <mbgl/math/minmax.hpp>
 #include <mbgl/util/action_journal.hpp>
 #include <mbgl/util/constants.hpp>
@@ -1571,6 +1572,19 @@ void NativeMapView::registerNative(jni::JNIEnv& env) {
         METHOD(&NativeMapView::isRenderingStatsViewEnabled, "nativeIsRenderingStatsViewEnabled"),
         METHOD(&NativeMapView::enableRenderingStatsView, "nativeEnableRenderingStatsView"),
         METHOD(&NativeMapView::setFrustumOffset, "nativeSetFrustumOffset"));
+
+    // Isomaps : natives STATIQUES (réglages globaux isomaps_tuning, indépendants d'une instance de carte)
+    jni::RegisterNatives(env,
+                         *javaClass,
+                         jni::MakeNativeMethod<decltype(&NativeMapView::isomapsSetSymbolFade),
+                                               &NativeMapView::isomapsSetSymbolFade>("nativeIsomapsSetSymbolFade"));
+}
+
+void NativeMapView::isomapsSetSymbolFade(jni::JNIEnv&,
+                                         const jni::Class<NativeMapView>&,
+                                         jni::jfloat startMeters,
+                                         jni::jfloat widthMeters) {
+    mbgl::isomaps::setSymbolFade(static_cast<float>(startMeters), static_cast<float>(widthMeters));
 }
 
 void NativeMapView::onRegisterShaders(gfx::ShaderRegistry&) {};

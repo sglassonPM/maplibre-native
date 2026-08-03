@@ -35,6 +35,8 @@ class TerrainIsomapsActivity : AppCompatActivity() {
                 .tilt(60.0)
                 .bearing(150.0)
                 .build()
+            // Rideau d'extinction des étiquettes : mêmes valeurs que le dashboard iOS (6 km / 4 km)
+            MapLibreMap.isomapsSetSymbolFade(6000f, 4000f)
             val json = assets.open("isomaps_terrain_style.json").bufferedReader().use { it.readText() }
             map.setStyle(Style.Builder().fromJson(json))
         }
