@@ -96,13 +96,17 @@ class TerrainActivity : AppCompatActivity() {
               "sources": {
                 "mapterhorn": {
                   "type": "raster-dem",
-                  "url": "https://tiles.mapterhorn.com/tilejson.json",
+                  "tiles": ["https://tiles.mapterhorn.com/{z}/{x}/{y}.webp"],
+                  "tileSize": 512,
+                  "maxzoom": 12,
                   "encoding": "terrarium",
                   "attribution": "<a href=\"https://mapterhorn.com\">Mapterhorn</a>"
                 },
                 "mapterhorn-terrain": {
                   "type": "raster-dem",
-                  "url": "https://tiles.mapterhorn.com/tilejson.json",
+                  "tiles": ["https://tiles.mapterhorn.com/{z}/{x}/{y}.webp"],
+                  "tileSize": 512,
+                  "maxzoom": 12,
                   "encoding": "terrarium",
                   "attribution": "<a href=\"https://mapterhorn.com\">Mapterhorn</a>"
                 }

@@ -1,0 +1,131 @@
+{
+  "metadata": {
+    "mapbox:autocomposite": false,
+    "openmaptiles:version": "3.x"
+  },
+  "layers": [
+    {
+      "id": "bg-test",
+      "type": "background",
+      "paint": {
+        "background-color": "#b8c7d6"
+      }
+    },
+    {
+      "id": "satellite-raster",
+      "type": "raster",
+      "source": "satellite",
+      "maxzoom": 21,
+      "paint": {
+        "raster-opacity": 1,
+        "raster-fade-duration": 0
+      }
+    },
+    {
+      "id": "coastlines",
+      "type": "line",
+      "source": "openmaptiles",
+      "source-layer": "coastlines",
+      "paint": {
+        "line-color": "#ffffff",
+        "line-width": 0.5,
+        "line-opacity": 0.7
+      }
+    },
+    {
+      "id": "peak",
+      "type": "symbol",
+      "source": "openmaptiles",
+      "source-layer": "mountain_peak",
+      "minzoom": 11.5,
+      "layout": {
+        "visibility": "visible",
+        "text-font": [
+          "Noto Sans Italic"
+        ],
+        "icon-image": "mountain-11",
+        "icon-size": 1,
+        "text-size": 9,
+        "text-field": "{name:latin}\n{ele}m",
+        "symbol-spacing": 350,
+        "text-max-width": 5,
+        "text-letter-spacing": 0.2,
+        "text-rotation-alignment": "viewport",
+        "icon-rotation-alignment": "viewport",
+        "text-offset": [
+          0,
+          0.9
+        ],
+        "text-anchor": "top"
+      },
+      "filter": [
+        "all",
+        [
+          "in",
+          "class",
+          "peak"
+        ]
+      ],
+      "paint": {
+        "text-color": "#1c2a33",
+        "text-halo-color": "#ffffff",
+        "text-halo-width": 1.2,
+        "text-halo-blur": 0.4
+      }
+    }
+  ],
+  "sources": {
+    "openmaptiles": {
+      "tiles": [
+        "https://api.iso-maps.com/v1/tiles/{z}/{x}/{y}.pbf?api_key=ZTTE9VTFXz4XQuKZPk5J5rR3dwbReZ5qAhBHRtfLalnvbCMNGEO7aPYzEifJ"
+      ],
+      "attribution": "© Isomaps, OpenStreetMap",
+      "type": "vector",
+      "maxzoom": 14
+    },
+    "natural_earth_shaded_relief": {
+      "tiles": [
+        "https://klokantech.github.io/naturalearthtiles/tiles/natural_earth_2_shaded_relief.raster/{z}/{x}/{y}.png"
+      ],
+      "type": "raster"
+    },
+    "satellite": {
+      "type": "raster",
+      "attribution": "© Isomaps, MapTiler",
+      "minzoom": 0,
+      "maxzoom": 18,
+      "tileSize": 512,
+      "tiles": [
+        "https://api.maptiler.com/maps/satellite-v4/{z}/{x}/{y}@2x.webp?key=J7FRYBWhpMIw5Eh5pZOz"
+      ]
+    },
+    "terrainSource": {
+      "type": "raster-dem",
+      "attribution": "© Isomaps, RGE ALTI, Copernicus",
+      "tileSize": 256,
+      "encoding": "mapbox",
+      "tiles": [
+        "https://cdn.iso-maps.com/terrain/{z}/{x}/{y}.png"
+      ],
+      "minzoom": 6,
+      "maxzoom": 18
+    }
+  },
+  "version": 8,
+  "id": "isomaps",
+  "name": "Isomaps Satellite + Terrain 3D",
+  "sprite": "https://www.iso-maps.com/tiles/styles/iso/sprite2",
+  "glyphs": "https://api.iso-maps.com/v1/tiles/fonts/{fontstack}/{range}.pbf?api_key=ZTTE9VTFXz4XQuKZPk5J5rR3dwbReZ5qAhBHRtfLalnvbCMNGEO7aPYzEifJ",
+  "bearing": 0,
+  "pitch": 0,
+  "zoom": 4,
+  "center": [
+    8,
+    47
+  ],
+  "terrain": {
+    "source": "terrainSource",
+    "exaggeration": 1.1,
+    "basemap": "satellite"
+  }
+}
