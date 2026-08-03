@@ -50,16 +50,16 @@ layout (std140) uniform SymbolDrawableUBO {
     highp float u_opacity_t;
     highp float u_halo_width_t;
     highp float u_halo_blur_t;
-    lowp float drawable_pad1;
-    lowp float drawable_pad2;
-    lowp float drawable_pad3;
+    highp float u_fog_cam_x;      // Isomaps BRUME symboles : oeil en repere local tuile (0..8192)
+    highp float u_fog_cam_y;
+    highp float u_fog_m_per_unit; // 0 => brume inactive (pas de terrain / screen-space)
     // 3D terrain elevation
     highp vec4 u_dem_coords;
     highp vec4 u_dem_unpack;
     highp float u_dem_dim;
     highp float u_dem_exaggeration;
     lowp float u_dem_enabled;
-    lowp float drawable_pad4;
+    highp float u_fog_start;      // Isomaps BRUME symboles : debut de brume (m)
 };
 
 uniform sampler2D u_dem;
@@ -160,6 +160,13 @@ lowp float opacity = u_opacity;
     float fade_change = fade_opacity[1] > 0.5 ? u_symbol_fade_change : -u_symbol_fade_change;
     v_fade_opacity = max(0.0, min(1.0, fade_opacity[0] + fade_change));
     v_fade_opacity *= calculate_visibility(gl_Position, u_depth, u_dem_enabled);
+    // Isomaps BRUME symboles : meme loi que le voile du terrain (fog_start puis +47 km), mais
+    // extinction TOTALE au voile plein (le terrain garde des silhouettes, pas les etiquettes).
+    // u_fog_m_per_unit = 0 (pas de terrain / screen-space) => keep = 1, inactif.
+    float isomapsFogKeep = 1.0 -
+        clamp((length(a_pos - vec2(u_fog_cam_x, u_fog_cam_y)) * u_fog_m_per_unit - u_fog_start) / 47000.0,
+              0.0, 1.0);
+    v_fade_opacity *= isomapsFogKeep;
 }
 )";
     static constexpr const char* fragment = R"(uniform sampler2D u_texture;

@@ -10,6 +10,7 @@ struct ShaderSource<BuiltIn::CircleShader, gfx::Backend::Type::OpenGL> {
     static constexpr const char* name = "CircleShader";
     static constexpr const char* vertex = R"(layout (location = 0) in vec2 a_pos;
 out vec3 v_data;
+out float v_vis; // Isomaps : occlusion par le relief (0 = cache derriere une crete)
 
 layout (std140) uniform GlobalPaintParamsUBO {
     highp vec2 u_pattern_atlas_texsize;
@@ -47,6 +48,7 @@ layout (std140) uniform CircleDrawableUBO {
 };
 
 uniform sampler2D u_dem;
+uniform sampler2D u_depth; // Isomaps : pack profondeur terrain (occlusion)
 
 layout (std140) uniform CircleEvaluatedPropsUBO {
     highp vec4 u_color;
@@ -163,9 +165,17 @@ lowp float stroke_opacity = u_stroke_opacity;
     lowp float antialiasblur = 1.0 / DEVICE_PIXEL_RATIO / (radius + stroke_width);
 
     v_data = vec3(extrude.x, extrude.y, antialiasblur);
+
+    // Isomaps OCCLUSION par le relief (meme mecanique que les symboles) : le CENTRE du cercle,
+    // sureleve de +40 m (DEM vectoriel lisse vs surface fine), est teste contre le pack de
+    // profondeur terrain — un point d'eau derriere une crete disparait. u_dem_enabled = 0 (pas
+    // de terrain) => vis = 1, inactif.
+    vec4 isomapsVisPoint = u_matrix * vec4(circle_center, ele, 1.0) + u_matrix * vec4(0.0, 0.0, 40.0, 0.0);
+    v_vis = calculate_visibility(isomapsVisPoint, u_depth, u_dem_enabled);
 }
 )";
     static constexpr const char* fragment = R"(in vec3 v_data;
+in float v_vis;
 
 layout (std140) uniform CircleEvaluatedPropsUBO {
     highp vec4 u_color;
@@ -239,7 +249,7 @@ lowp float stroke_opacity = u_stroke_opacity;
         extrude_length - radius / (radius + stroke_width)
     );
 
-    fragColor = opacity_t * mix(color * opacity, stroke_color * stroke_opacity, color_t);
+    fragColor = v_vis * opacity_t * mix(color * opacity, stroke_color * stroke_opacity, color_t);
 
 #ifdef OVERDRAW_INSPECTOR
     fragColor = vec4(1.0);

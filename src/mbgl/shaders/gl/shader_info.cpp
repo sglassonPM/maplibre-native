@@ -65,6 +65,7 @@ const std::vector<AttributeInfo> CircleShaderInfo::attributes = {
 };
 const std::vector<TextureInfo> CircleShaderInfo::textures = {
     TextureInfo{"u_dem", idCircleDEMTexture},
+    TextureInfo{"u_depth", idCircleDepthTexture}, // Isomaps : occlusion par le relief
 };
 
 // Collision Box
