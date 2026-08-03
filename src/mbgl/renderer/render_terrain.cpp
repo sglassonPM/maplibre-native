@@ -1356,10 +1356,14 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID, float x, float 
                               static_cast<uint32_t>(gy * (1u << 19));
     // Garde de plausibilité : un décodage DEM aberrant (pixel corrompu, nodata terrain-RGB) peut sortir
     // des milliers de mètres fantômes (mesuré : échantillon ~12 700 m → anti-collision → œil expédié à
-    // 13 000 m). Hors de [-12000, 9500] m (Everest + marge), l'échantillon est du bruit : jamais stocké,
-    // jamais servi.
+    // 13 000 m). Hors de [-12000, 9000] m, l'échantillon est du bruit : jamais stocké, jamais servi.
     constexpr float kMinPlausibleM = -12000.0f;
-    constexpr float kMaxPlausibleM = 9500.0f;
+    // Isomaps (point 2b) : plafond ABAISSÉ 9500 → 9000. Aucun terrain réel au-dessus de l'Everest
+    // (8848 m) ; la zone (9000, 9500] est la SENTINELLE nodata/overzoom — le provider DEM borne
+    // justement à 9500 (dem_elevation_provider). L'accepter puis l'exagérer (×1,1 = 10 450)
+    // empoisonnait centerAltitude → caméra gelée (cf. piège centerAltitude, point 1). On la rejette
+    // désormais comme du bruit → centreAlt reste sain, le poison n'entre plus.
+    constexpr float kMaxPlausibleM = 9000.0f;
     auto held = elevationHold.find(holdCell);
     if (held != elevationHold.end() &&
         !(held->second.v >= kMinPlausibleM && held->second.v <= kMaxPlausibleM)) {
@@ -1393,7 +1397,29 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID, float x, float 
     const float br = static_cast<float>(demData.get(x0 + 1, y0 + 1));
     const float top = tl + (tr - tl) * fx;
     const float bottom = bl + (br - bl) * fx;
-    const float value = top + (bottom - top) * fy;
+    float value = top + (bottom - top) * fy;
+    // Isomaps (point 2b bis) : REJET D'OUTLIER SPATIAL, géo-agnostique. Un pixel DEM corrompu
+    // (~8615 m dans les Alpes — SOUS l'Everest 8848, donc invisible au plafond de plausibilité) est
+    // un PIC d'UN SEUL texel. À zoom fin (bestZoom >= 12, texel <= ~40 m) aucun relief réel ne
+    // s'élève de plus de 2000 m d'un texel au voisin : un tel écart trahit un texel corrompu. On
+    // remplace alors la bilinéaire (qui MÊLE le pic) par la MÉDIANE des 4 texels — robuste à un
+    // outlier haut OU bas. Marche partout (Alpes comme Himalaya), sans seuil géographique.
+    // (Complète le plafond 9000 du point 2b, qui n'attrape que les aberrations > Everest.)
+    if (bestZoom >= 12) {
+        float q[4] = {tl, tr, bl, br};
+        for (int i = 0; i < 3; ++i) {
+            for (int j = i + 1; j < 4; ++j) {
+                if (q[j] < q[i]) {
+                    const float t = q[i];
+                    q[i] = q[j];
+                    q[j] = t;
+                }
+            }
+        }
+        if (q[3] - q[0] > 2000.0f) {
+            value = (q[1] + q[2]) * 0.5f; // médiane = ignore le texel aberrant
+        }
+    }
     if (!(value >= kMinPlausibleM && value <= kMaxPlausibleM)) {
         // Décodage aberrant : ne JAMAIS le mémoriser ni le servir — répondre la mémoire saine, sinon 0
         // (= « inconnu » pour les consommateurs, comme un DEM absent).
@@ -1409,6 +1435,36 @@ float RenderTerrain::getElevation(const UnwrappedTileID& tileID, float x, float 
 
 float RenderTerrain::getElevationWithExaggeration(const UnwrappedTileID& tileID, float x, float y) const {
     return getElevation(tileID, x, y) * getExaggeration();
+}
+
+std::vector<std::pair<CanonicalTileID, DEMData>> RenderTerrain::isomapsCollectLoadedDEMs() const {
+    // Mêmes critères de validité que getElevation : données décodées présentes, et pas une tuile
+    // entièrement NoData (à traiter comme absente — repli d'ancêtre côté requête).
+    std::vector<std::pair<CanonicalTileID, DEMData>> out;
+    if (!demSource) {
+        return out;
+    }
+    const auto* loadedTiles = demSource->getLoadedTiles();
+    if (!loadedTiles) {
+        return out;
+    }
+    out.reserve(loadedTiles->size());
+    for (const auto& entry : *loadedTiles) {
+        Tile* t = entry.second.get();
+        if (!t || t->kind != Tile::Kind::RasterDEM) {
+            continue;
+        }
+        auto* bucket = static_cast<RasterDEMTile*>(t)->getBucket();
+        if (!bucket) {
+            continue;
+        }
+        const DEMData& dem = bucket->getDEMData();
+        if (!dem.getImagePtr() || dem.dim <= 0 || dem.isAllNoData()) {
+            continue;
+        }
+        out.emplace_back(entry.first.canonical, dem); // copie légère : l'image est partagée
+    }
+    return out;
 }
 
 std::optional<RenderTerrain::TerrainData> RenderTerrain::getTerrainData(const UnwrappedTileID& tileID) const {

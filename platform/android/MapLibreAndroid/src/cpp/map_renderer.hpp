@@ -2,10 +2,12 @@
 
 #include <mbgl/actor/actor_ref.hpp>
 #include <mbgl/actor/scheduler.hpp>
+#include <mbgl/util/geo.hpp>
 #include <mbgl/util/image.hpp>
 
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <utility>
 #include <optional>
 
@@ -71,6 +73,11 @@ public:
     // Gives a handle to the Renderer to enable actions on
     // any thread.
     ActorRef<Renderer> actor() const;
+
+    // Isomaps : élévation du terrain 3D (m, exagération incluse), sûre depuis n'importe quel thread —
+    // pas d'actor : Renderer::queryTerrainElevationCrossThread ne lit qu'un instantané immuable sous
+    // mutex. Sert à la collision caméra (Transform, thread de la Map). nullopt sans terrain/renderer.
+    std::optional<double> isomapsQueryTerrainElevation(const mbgl::LatLng&) const;
 
     // From Scheduler. Schedules by using callbacks to the
     // JVM to process the mailbox on the right thread.
@@ -147,6 +154,11 @@ private:
     std::unique_ptr<AndroidRendererBackend> backend;
     std::unique_ptr<Renderer> renderer;
     std::unique_ptr<ActorRef<Renderer>> rendererRef;
+
+    // Isomaps : garde la durée de vie de `renderer` pour isomapsQueryTerrainElevation (lecture depuis
+    // le thread de la Map). Le thread GL prend le verrou EXCLUSIF autour de création/destruction du
+    // renderer ; les lecteurs prennent le verrou PARTAGÉ (jamais tenu longtemps — lecture d'instantané).
+    mutable std::shared_mutex rendererLifecycleMutex;
 
     using UniqueANativeWindow = std::unique_ptr<ANativeWindow, std::function<void(ANativeWindow*)>>;
     UniqueANativeWindow window;

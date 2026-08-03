@@ -48,6 +48,10 @@ public:
 
     const TaggedScheduler& getThreadPool() const override;
 
+    // Isomaps : élévation du terrain 3D (m, exagération incluse), sûre depuis n'importe quel thread
+    // (lecture d'instantané, pas d'aller-retour vers le thread GL). Collision caméra du Transform.
+    std::optional<double> isomapsQueryTerrainElevation(const mbgl::LatLng&) const;
+
     // Feature querying
     std::vector<Feature> queryRenderedFeatures(const ScreenCoordinate&, const RenderedQueryOptions&) const;
     std::vector<Feature> queryRenderedFeatures(const ScreenBox&, const RenderedQueryOptions&) const;

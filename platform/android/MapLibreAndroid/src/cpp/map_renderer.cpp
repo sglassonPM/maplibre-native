@@ -84,6 +84,17 @@ ActorRef<Renderer> MapRenderer::actor() const {
     return *rendererRef;
 }
 
+std::optional<double> MapRenderer::isomapsQueryTerrainElevation(const mbgl::LatLng& latLng) const {
+    // Appelée depuis le thread de la Map (collision caméra du Transform). Pas d'actor : la requête ne
+    // lit qu'un instantané immuable publié sous mutex par le thread de rendu — un aller-retour bloquant
+    // vers le thread GL par échantillon (le rayon œil→centre est sondé tous les 75 m) gèlerait l'UI.
+    std::shared_lock<std::shared_mutex> lock(rendererLifecycleMutex);
+    if (!renderer) {
+        return std::nullopt;
+    }
+    return renderer->queryTerrainElevationCrossThread(latLng);
+}
+
 void MapRenderer::schedule(std::function<void()>&& scheduled) {
     MLN_TRACE_FUNC();
     try {
@@ -195,7 +206,11 @@ void MapRenderer::requestSnapshot(SnapshotCallback callback) {
 // Called on OpenGL thread //
 
 void MapRenderer::resetRenderer() {
-    renderer.reset();
+    {
+        // Isomaps : exclure les lecteurs cross-thread (isomapsQueryTerrainElevation) pendant la destruction.
+        std::unique_lock<std::shared_mutex> lock(rendererLifecycleMutex);
+        renderer.reset();
+    }
 
     if (!asyncRendererCleanup) {
         backend.reset();
@@ -281,13 +296,20 @@ void MapRenderer::onSurfaceCreated(JNIEnv& env, const jni::Object<AndroidSurface
     }
 
     // Reset in opposite order
-    renderer.reset();
+    {
+        // Isomaps : exclure les lecteurs cross-thread (isomapsQueryTerrainElevation) pendant l'échange.
+        std::unique_lock<std::shared_mutex> lock(rendererLifecycleMutex);
+        renderer.reset();
+    }
     backend.reset();
     window = std::move(window_);
 
     // Create the new backend and renderer
     backend = AndroidRendererBackend::Create(window.get());
-    renderer = std::make_unique<Renderer>(backend->getImpl(), pixelRatio, localIdeographFontFamily);
+    {
+        std::unique_lock<std::shared_mutex> lock(rendererLifecycleMutex);
+        renderer = std::make_unique<Renderer>(backend->getImpl(), pixelRatio, localIdeographFontFamily);
+    }
     rendererRef = std::make_unique<ActorRef<Renderer>>(*renderer, mailboxData.getMailbox());
 
 #if MLN_RENDER_BACKEND_OPENGL

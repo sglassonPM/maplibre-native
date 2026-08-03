@@ -110,6 +110,10 @@ std::optional<double> Renderer::queryTerrainElevation(const LatLng& latLng) cons
     return impl->orchestrator.queryTerrainElevation(latLng);
 }
 
+std::optional<double> Renderer::queryTerrainElevationCrossThread(const LatLng& latLng) const {
+    return impl->orchestrator.queryTerrainElevationCrossThread(latLng);
+}
+
 std::array<int, 5> Renderer::isomapsTerrainDebug() const {
     return impl->orchestrator.isomapsTerrainDebug();
 }

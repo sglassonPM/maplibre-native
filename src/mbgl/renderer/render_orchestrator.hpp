@@ -18,8 +18,11 @@
 #include <mbgl/text/placement.hpp>
 #include <mbgl/renderer/render_tree.hpp>
 
+#include <mbgl/geometry/dem_data.hpp>
+
 #include <map>
 #include <memory>
+#include <mutex>
 #include <ranges>
 #include <string>
 #include <unordered_map>
@@ -79,6 +82,11 @@ public:
     /// échantillonnée depuis le DEM chargé côté CPU. nullopt si pas de terrain actif. Sert à
     /// l'anti-collision caméra (empêcher l'œil de passer sous le relief), thread principal.
     std::optional<double> queryTerrainElevation(const LatLng&) const;
+    /// Isomaps (Android) : même réponse que queryTerrainElevation, mais lisible depuis N'IMPORTE QUEL
+    /// thread — lit un instantané immuable des DEM chargés publié par le thread de rendu à chaque
+    /// frame. Sert à la collision caméra, appelée par le Transform sur le thread de la Map (qui n'est
+    /// PAS le thread de rendu sur Android, contrairement à iOS). nullopt = donnée inconnue.
+    std::optional<double> queryTerrainElevationCrossThread(const LatLng&) const;
     std::vector<Feature> queryShapeAnnotations(const ScreenLineString&) const;
 
     FeatureExtensionValue queryFeatureExtensions(const std::string& sourceID,
@@ -243,6 +251,17 @@ private:
     std::unordered_map<std::string, std::unique_ptr<RenderLayer>> renderLayers;
     RenderLight renderLight;
     std::unique_ptr<RenderTerrain> renderTerrain;
+
+    // Isomaps : instantané des DEM chargés pour queryTerrainElevationCrossThread. Écrit par le thread
+    // de rendu (isomapsUpdateElevationSnapshot), lu sous mutex depuis le thread de la Map. Le contenu
+    // est immuable (images DEM partagées) : seul l'échange du shared_ptr est synchronisé.
+    struct IsomapsElevationSnapshot {
+        std::vector<std::pair<CanonicalTileID, DEMData>> tiles;
+        double exaggeration;
+    };
+    void isomapsUpdateElevationSnapshot(); // thread de rendu, par frame
+    mutable std::mutex isomapsElevationSnapshotMutex;
+    std::shared_ptr<const IsomapsElevationSnapshot> isomapsElevationSnapshot;
 
     CrossTileSymbolIndex crossTileSymbolIndex;
     PlacementController placementController;

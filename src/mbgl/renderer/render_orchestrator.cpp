@@ -794,6 +794,119 @@ std::optional<double> RenderOrchestrator::queryTerrainElevation(const LatLng& la
     return static_cast<double>(renderTerrain->getElevationWithExaggeration(tileID, x, y));
 }
 
+void RenderOrchestrator::isomapsUpdateElevationSnapshot() {
+    // Thread de rendu. Publie (ou retire) l'instantané des DEM chargés pour la collision caméra
+    // interrogée depuis le thread de la Map (Android). Reconstruction seulement si le jeu
+    // (tuile, image) ou l'exagération a changé — la comparaison est bon marché (pointeurs).
+    if (!renderTerrain || !renderTerrain->isEnabled()) {
+        if (isomapsElevationSnapshot) {
+            std::lock_guard<std::mutex> lock(isomapsElevationSnapshotMutex);
+            isomapsElevationSnapshot = nullptr;
+        }
+        return;
+    }
+    auto tiles = renderTerrain->isomapsCollectLoadedDEMs();
+    const double exaggeration = static_cast<double>(renderTerrain->getExaggeration());
+    // Lecture sans verrou : le thread de rendu est le SEUL écrivain de ce shared_ptr.
+    const auto& prev = isomapsElevationSnapshot;
+    bool same = prev && prev->exaggeration == exaggeration && prev->tiles.size() == tiles.size();
+    if (same) {
+        for (size_t i = 0; i < tiles.size(); ++i) {
+            if (!(prev->tiles[i].first == tiles[i].first) ||
+                prev->tiles[i].second.getImagePtr() != tiles[i].second.getImagePtr()) {
+                same = false;
+                break;
+            }
+        }
+    }
+    if (same) {
+        return;
+    }
+    auto snapshot = std::make_shared<const IsomapsElevationSnapshot>(
+        IsomapsElevationSnapshot{std::move(tiles), exaggeration});
+    std::lock_guard<std::mutex> lock(isomapsElevationSnapshotMutex);
+    isomapsElevationSnapshot = std::move(snapshot);
+}
+
+std::optional<double> RenderOrchestrator::queryTerrainElevationCrossThread(const LatLng& latLng) const {
+    std::shared_ptr<const IsomapsElevationSnapshot> snapshot;
+    {
+        std::lock_guard<std::mutex> lock(isomapsElevationSnapshotMutex);
+        snapshot = isomapsElevationSnapshot;
+    }
+    if (!snapshot || snapshot->tiles.empty()) {
+        return std::nullopt;
+    }
+
+    // Position normalisée [0,1[ du point (Web Mercator, z0).
+    const TileCoordinate tc = TileCoordinate::fromLatLng(0, latLng.wrapped());
+    const double gx = tc.p.x;
+    const double gy = tc.p.y;
+    if (gy < 0.0 || gy >= 1.0) {
+        return std::nullopt;
+    }
+
+    // La tuile DEM la plus FINE qui CONTIENT le point (mêmes règles que RenderTerrain::getElevation,
+    // sans la mémoire d'échantillon — l'hystérésis anti-oscillation n'est utile qu'au maillage).
+    const DEMData* best = nullptr;
+    CanonicalTileID bestID(0, 0, 0);
+    int bestZoom = -1;
+    for (const auto& [id, dem] : snapshot->tiles) {
+        const double n = static_cast<double>(1ull << id.z);
+        if (static_cast<int>(id.z) <= bestZoom ||
+            !(gx >= id.x / n && gx < (id.x + 1) / n && gy >= id.y / n && gy < (id.y + 1) / n)) {
+            continue;
+        }
+        bestZoom = static_cast<int>(id.z);
+        bestID = id;
+        best = &dem;
+    }
+    if (!best) {
+        return std::nullopt;
+    }
+
+    // Bilinéaire sur les texels, comme RenderTerrain::getElevation (gl-js Terrain.getDEMElevation).
+    const double nD = static_cast<double>(1ull << bestID.z);
+    const double subX = gx * nD - static_cast<double>(bestID.x);
+    const double subY = gy * nD - static_cast<double>(bestID.y);
+    const float dim = static_cast<float>(best->dim);
+    const float px = util::clamp(static_cast<float>(subX) * dim, 0.0f, dim - 1.0f);
+    const float py = util::clamp(static_cast<float>(subY) * dim, 0.0f, dim - 1.0f);
+    const auto x0 = static_cast<int32_t>(std::floor(px));
+    const auto y0 = static_cast<int32_t>(std::floor(py));
+    const float fx = px - static_cast<float>(x0);
+    const float fy = py - static_cast<float>(y0);
+    const float tl = static_cast<float>(best->get(x0, y0));
+    const float tr = static_cast<float>(best->get(x0 + 1, y0));
+    const float bl = static_cast<float>(best->get(x0, y0 + 1));
+    const float br = static_cast<float>(best->get(x0 + 1, y0 + 1));
+    const float top = tl + (tr - tl) * fx;
+    const float bottom = bl + (br - bl) * fx;
+    float value = top + (bottom - top) * fy;
+
+    // Rejet d'outlier spatial (pixel DEM corrompu = pic d'un seul texel) — cf. getElevation.
+    if (bestZoom >= 12) {
+        float q[4] = {tl, tr, bl, br};
+        for (int i = 0; i < 3; ++i) {
+            for (int j = i + 1; j < 4; ++j) {
+                if (q[j] < q[i]) {
+                    const float t = q[i];
+                    q[i] = q[j];
+                    q[j] = t;
+                }
+            }
+        }
+        if (q[3] - q[0] > 2000.0f) {
+            value = (q[1] + q[2]) * 0.5f;
+        }
+    }
+    // Garde de plausibilité (bruit de décodage, sentinelle nodata 9500) — cf. getElevation.
+    if (!(value >= -12000.0f && value <= 9000.0f)) {
+        return std::nullopt;
+    }
+    return static_cast<double>(value) * snapshot->exaggeration;
+}
+
 FeatureExtensionValue RenderOrchestrator::queryFeatureExtensions(
     const std::string& sourceID,
     const Feature& feature,
@@ -1079,6 +1192,7 @@ void RenderOrchestrator::updateLayers(gfx::ShaderRegistry& shaders,
     if (renderTerrain && renderTerrain->isEnabled()) {
         renderTerrain->update(*this, shaders, context, texturePool, state, updateParameters, renderTree, changes);
     }
+    isomapsUpdateElevationSnapshot();
 
     addChanges(changes);
 }

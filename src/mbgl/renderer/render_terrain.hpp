@@ -127,6 +127,11 @@ public:
      */
     float getExaggeration() const;
 
+    /// Isomaps (Android) : copie légère (image partagée) des DEM chargés et valides, pour publier
+    /// l'instantané d'élévation cross-thread (collision caméra interrogée depuis le thread de la Map).
+    /// Thread de rendu uniquement — lit la pyramide de tuiles comme getElevation.
+    std::vector<std::pair<CanonicalTileID, DEMData>> isomapsCollectLoadedDEMs() const;
+
     /**
      * @brief Get the source ID providing DEM data
      */

@@ -192,6 +192,10 @@ void AndroidRendererFrontend::removeFeatureState(const std::string& sourceID,
     mapRenderer.actor().invoke(&Renderer::removeFeatureState, sourceID, sourceLayerID, featureID, stateKey);
 }
 
+std::optional<double> AndroidRendererFrontend::isomapsQueryTerrainElevation(const mbgl::LatLng& latLng) const {
+    return mapRenderer.isomapsQueryTerrainElevation(latLng);
+}
+
 std::vector<Feature> AndroidRendererFrontend::queryRenderedFeatures(const ScreenBox& box,
                                                                     const RenderedQueryOptions& options) const {
     // Select the right overloaded method

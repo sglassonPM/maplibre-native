@@ -65,6 +65,11 @@ public:
     /// terrain actif. Échantillonnée depuis le DEM CPU sur le thread appelant (= thread de rendu).
     std::optional<double> queryTerrainElevation(const LatLng&) const;
 
+    /// Isomaps (Android) : même réponse, mais sûre depuis N'IMPORTE QUEL thread — lit un instantané
+    /// immuable publié par le thread de rendu. Pour la collision caméra appelée par le Transform sur
+    /// le thread de la Map (distinct du thread de rendu sur Android, contrairement à iOS).
+    std::optional<double> queryTerrainElevationCrossThread(const LatLng&) const;
+
     /// DIAG isomaps : {terrain!=null, mesh tiles, render targets, terrainDraping, TileLayerGroups sautés}.
     std::array<int, 5> isomapsTerrainDebug() const;
     /// Isomaps DIAG : MTL::Texture* du pack de profondeur terrain (nullptr sans terrain/passe) —

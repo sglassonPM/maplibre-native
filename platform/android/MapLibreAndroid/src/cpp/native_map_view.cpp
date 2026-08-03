@@ -99,6 +99,21 @@ NativeMapView::NativeMapView(jni::JNIEnv& _env,
         mbgl::android::FileSource::getSharedResourceOptions(_env, jFileSource),
         mbgl::android::FileSource::getSharedClientOptions(_env, jFileSource),
         mbgl::android::NativeMapOptions::getActionJournalOptions(_env, jNativeMapOptions));
+
+    // Isomaps : collision caméra/terrain 3D — l'œil ne descend jamais sous 150 m au-dessus du sol
+    // (parité iOS, cf. MLNMapView.mm). La fonction d'élévation est appelée par le Transform sur le
+    // thread de la Map ; elle lit un instantané immuable publié par le thread de rendu (jamais
+    // d'aller-retour bloquant vers le thread GL). Weak : la lambda vit dans le Transform (détruit
+    // avec la Map), le frontend est partagé — pas de cycle, pas de pointeur pendouillant.
+    std::weak_ptr<AndroidRendererFrontend> weakFrontend = rendererFrontend;
+    map->setTerrainCameraCollision(
+        [weakFrontend](const mbgl::LatLng& latLng) -> std::optional<double> {
+            if (auto frontend = weakFrontend.lock()) {
+                return frontend->isomapsQueryTerrainElevation(latLng);
+            }
+            return std::nullopt;
+        },
+        150.0);
 }
 
 /**
@@ -195,6 +210,15 @@ void NativeMapView::onWillStartRenderingFrame() {
 
 void NativeMapView::onDidFinishRenderingFrame(const MapObserver::RenderFrameStatus& status) {
     assert(vm != nullptr);
+
+    // Isomaps : contraintes caméra↔terrain appliquées en continu (parité avec le display link iOS) —
+    // sinon elles ne tournent que pendant les mutations de caméra : à l'arrivée des tuiles DEM la
+    // caméra peut rester SOUS le terrain (écran bleu) jusqu'au premier mouvement. Observer forwardé
+    // sur le thread de la Map (ForwardingRendererObserver) → accès Map sûr. No-op quasi gratuit ;
+    // ne redemande une frame que si une correction a réellement eu lieu.
+    if (map) {
+        map->enforceTerrainCameraConstraints();
+    }
 
     android::UniqueEnv _env = android::AttachEnv();
     static auto& javaClass = jni::Class<NativeMapView>::Singleton(*_env);
