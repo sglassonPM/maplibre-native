@@ -11,6 +11,117 @@
 
 #import <Metal/Metal.hpp>
 
+// ─── Watermark Isomaps : COMPILÉ UNIQUEMENT pour le build SDK vendu ───────────────
+// Flag ISOMAPS_SDK_WATERMARK (bazel : --define=isomaps_watermark=on). Build par défaut
+// / app Isomaps → aucun watermark.
+#if defined(ISOMAPS_SDK_WATERMARK)
+#import <simd/simd.h>
+#include <algorithm>
+#import "isomaps_watermark_data.h"
+
+// ─── ISOMAPS WATERMARK (attribution incrustée dans le rendu Metal — NON RETIRABLE) ───
+// Le logo Isomaps est embarqué dans le binaire (kIsomapsWatermarkRGBA) et dessiné à
+// chaque frame sur le drawable, juste avant présentation, en bas à droite. Aucune API
+// publique ne permet de le masquer ; le retirer exige de modifier ET recompiler le SDK.
+@interface MLNIsomapsWatermark : NSObject
++ (void)drawInto:(id<MTLCommandBuffer>)cmd
+        drawable:(id<CAMetalDrawable>)drawable
+          device:(id<MTLDevice>)device;
+@end
+
+@implementation MLNIsomapsWatermark {
+}
+
+static id<MTLRenderPipelineState> sWmPipeline = nil;
+static id<MTLTexture> sWmTexture = nil;
+static id<MTLSamplerState> sWmSampler = nil;
+
++ (void)ensure:(id<MTLDevice>)device pixelFormat:(MTLPixelFormat)pf {
+  if (sWmPipeline && sWmTexture && sWmSampler) return;
+
+  NSString* src =
+      @"#include <metal_stdlib>\n"
+      @"using namespace metal;\n"
+      @"struct VOut { float4 pos [[position]]; float2 uv; };\n"
+      @"vertex VOut wm_v(uint vid [[vertex_id]], constant float4* rect [[buffer(0)]]) {\n"
+      @"  float2 c[4] = { float2(0,0), float2(1,0), float2(0,1), float2(1,1) };\n"
+      @"  float2 q = c[vid];\n"
+      @"  float2 p = rect[0].xy + q * rect[0].zw;\n"       // p in [0,1], y up
+      @"  VOut o; o.pos = float4(p.x*2.0-1.0, p.y*2.0-1.0, 0.0, 1.0);\n"
+      @"  o.uv = float2(q.x, 1.0-q.y); return o;\n"
+      @"}\n"
+      @"fragment float4 wm_f(VOut in [[stage_in]], texture2d<float> t [[texture(0)]],\n"
+      @"                     sampler s [[sampler(0)]]) { return t.sample(s, in.uv); }\n";
+
+  NSError* err = nil;
+  id<MTLLibrary> lib = [device newLibraryWithSource:src options:nil error:&err];
+  if (!lib) return;
+  MTLRenderPipelineDescriptor* pd = [[MTLRenderPipelineDescriptor alloc] init];
+  pd.vertexFunction = [lib newFunctionWithName:@"wm_v"];
+  pd.fragmentFunction = [lib newFunctionWithName:@"wm_f"];
+  pd.colorAttachments[0].pixelFormat = pf;
+  pd.colorAttachments[0].blendingEnabled = YES;
+  pd.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+  pd.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+  pd.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+  pd.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorSourceAlpha;
+  pd.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+  pd.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+  sWmPipeline = [device newRenderPipelineStateWithDescriptor:pd error:&err];
+  if (!sWmPipeline) return;
+
+  MTLTextureDescriptor* td =
+      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
+                                                         width:kIsomapsWatermarkW
+                                                        height:kIsomapsWatermarkH
+                                                     mipmapped:NO];
+  td.usage = MTLTextureUsageShaderRead;
+  sWmTexture = [device newTextureWithDescriptor:td];
+  [sWmTexture replaceRegion:MTLRegionMake2D(0, 0, kIsomapsWatermarkW, kIsomapsWatermarkH)
+                mipmapLevel:0
+                  withBytes:kIsomapsWatermarkRGBA
+                bytesPerRow:kIsomapsWatermarkW * 4];
+
+  MTLSamplerDescriptor* sd = [[MTLSamplerDescriptor alloc] init];
+  sd.minFilter = MTLSamplerMinMagFilterLinear;
+  sd.magFilter = MTLSamplerMinMagFilterLinear;
+  sd.sAddressMode = MTLSamplerAddressModeClampToEdge;
+  sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
+  sWmSampler = [device newSamplerStateWithDescriptor:sd];
+}
+
++ (void)drawInto:(id<MTLCommandBuffer>)cmd
+        drawable:(id<CAMetalDrawable>)drawable
+          device:(id<MTLDevice>)device {
+  if (!cmd || !drawable || !device) return;
+  id<MTLTexture> target = drawable.texture;
+  if (!target) return;
+  [self ensure:device pixelFormat:target.pixelFormat];
+  if (!sWmPipeline || !sWmTexture || !sWmSampler) return;
+
+  const float fbW = (float)target.width, fbH = (float)target.height;
+  if (fbW < 2 || fbH < 2) return;
+  const float wpx = std::min(std::max(fbW * 0.22f, 90.0f), 340.0f);
+  const float hpx = wpx * (float)kIsomapsWatermarkH / (float)kIsomapsWatermarkW;
+  const float m = fbW * 0.03f;
+  simd::float4 rect = {(fbW - wpx - m) / fbW, m / fbH, wpx / fbW, hpx / fbH};  // x,y,w,h in [0,1], y up
+
+  MTLRenderPassDescriptor* rp = [MTLRenderPassDescriptor renderPassDescriptor];
+  rp.colorAttachments[0].texture = target;
+  rp.colorAttachments[0].loadAction = MTLLoadActionLoad;   // conserve la carte déjà rendue
+  rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+  id<MTLRenderCommandEncoder> enc = [cmd renderCommandEncoderWithDescriptor:rp];
+  [enc setRenderPipelineState:sWmPipeline];
+  [enc setVertexBytes:&rect length:sizeof(rect) atIndex:0];
+  [enc setFragmentTexture:sWmTexture atIndex:0];
+  [enc setFragmentSamplerState:sWmSampler atIndex:0];
+  [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+  [enc endEncoding];
+}
+
+@end
+#endif  // ISOMAPS_SDK_WATERMARK
+
 @interface MLNMapViewImplDelegate : NSObject <MTKViewDelegate>
 @end
 
@@ -72,6 +183,13 @@ public:
   void swap() override {
     id<CAMetalDrawable> currentDrawable = [mtlView currentDrawable];
     if (currentDrawable) {
+#if defined(ISOMAPS_SDK_WATERMARK)
+      // Logo Isomaps incrusté (build SDK vendu uniquement) — dessiné sur le drawable
+      // avant présentation, sur le command buffer courant.
+      [MLNIsomapsWatermark drawInto:commandBuffer
+                           drawable:currentDrawable
+                             device:mtlView.device];
+#endif
       if (presentsWithTransaction) {
         [commandBuffer commit];
         [commandBuffer waitUntilCompleted];

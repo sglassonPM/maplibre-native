@@ -2,6 +2,14 @@ load("@aspect_rules_js//js:defs.bzl", "js_binary")
 load("@rules_cc//cc:defs.bzl", "objc_library")
 load("//bazel:flags.bzl", "CPP_FLAGS", "MAPLIBRE_FLAGS", "WARNING_FLAGS")
 
+# Watermark Isomaps : activé par `bazel build --define=isomaps_watermark=on` (build SDK vendu).
+# Absent par défaut → aucun watermark dans l'app / les builds standard.
+config_setting(
+    name = "isomaps_watermark_on",
+    values = {"define": "isomaps_watermark=on"},
+    visibility = ["//visibility:public"],
+)
+
 objc_library(
     name = "macos-objcpp",
     srcs = [
@@ -101,7 +109,12 @@ objc_library(
         "-Wno-gnu-conditional-omitted-operand",
         "-Wno-gnu-statement-expression",
         "-Wno-deprecated-declarations",
-    ],
+    ] + select({
+        # Watermark Isomaps incrusté : build SDK vendu uniquement (bazel --define=isomaps_watermark=on).
+        # Build par défaut / app Isomaps → aucun watermark.
+        ":isomaps_watermark_on": ["-DISOMAPS_SDK_WATERMARK=1"],
+        "//conditions:default": [],
+    }),
     defines = ["GLES_SILENCE_DEPRECATION=1"],
     includes = [
         "darwin/include",

@@ -211,6 +211,13 @@ if(MLN_WITH_OPENGL)
     )
 endif()
 
+# Watermark Isomaps incrusté (build SDK vendu uniquement). OFF par défaut : l'app
+# et tout build standard n'embarquent PAS le logo. Activé via -DISOMAPS_SDK_WATERMARK=ON
+# (piloté par la propriété gradle isomaps.watermark). Voir map_renderer.cpp.
+if(ISOMAPS_SDK_WATERMARK)
+    target_compile_definitions(maplibre PRIVATE ISOMAPS_SDK_WATERMARK=1)
+endif()
+
 if(MLN_WITH_VULKAN)
     target_sources(
         maplibre PRIVATE

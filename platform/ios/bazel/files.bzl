@@ -19,6 +19,7 @@ MLN_IOS_PUBLIC_HEADERS = [
 ]
 
 MLN_IOS_PRIVATE_HEADERS = [
+    "src/isomaps_watermark_data.h",
     "src/NSOrthography+MLNAdditions.h",
     "src/UIDevice+MLNAdditions.h",
     "src/UIImage+MLNAdditions.h",

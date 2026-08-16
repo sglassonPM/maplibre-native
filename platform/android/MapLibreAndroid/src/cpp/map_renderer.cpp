@@ -10,6 +10,108 @@
 #include <android/native_window_jni.h>
 
 #include "attach_env.hpp"
+
+// ─── ISOMAPS WATERMARK (attribution incrustée dans le rendu — NON RETIRABLE) ───
+// Le logo Isomaps est embarqué dans le binaire (données RGBA compilées) et dessiné
+// à chaque frame après le rendu de la carte, en bas à droite. Aucune API publique
+// ne permet de le masquer ; le retirer exige de modifier ET recompiler le SDK.
+//
+// COMPILÉ UNIQUEMENT pour le build SDK vendu (flag ISOMAPS_SDK_WATERMARK, cf. CMakeLists
+// + gradle -Pisomaps.watermark=true). Build par défaut / app Isomaps → aucun watermark.
+#if defined(ISOMAPS_SDK_WATERMARK) && MLN_RENDER_BACKEND_OPENGL
+#include <GLES3/gl3.h>
+#include <algorithm>
+#include "isomaps_watermark_data.h"
+namespace {
+GLuint gWmProg = 0, gWmTex = 0, gWmVao = 0, gWmVbo = 0;
+GLint gWmRect = -1, gWmTexU = -1;
+GLuint isomapsWmShader(GLenum type, const char* src) {
+    GLuint s = glCreateShader(type); glShaderSource(s, 1, &src, nullptr); glCompileShader(s); return s;
+}
+void isomapsWatermarkEnsure() {
+    if (gWmProg && glIsProgram(gWmProg)) return;               // déjà prêt (contexte valide)
+    const char* vs = "#version 300 es\nlayout(location=0) in vec2 a;\nout vec2 v;\nuniform vec4 r;\n"
+                     "void main(){ v=vec2(a.x,1.0-a.y); vec2 p=r.xy+a*r.zw; gl_Position=vec4(p*2.0-1.0,0.0,1.0); }";
+    const char* fs = "#version 300 es\nprecision mediump float;\nin vec2 v;out vec4 o;uniform sampler2D t;\n"
+                     "void main(){ o=texture(t,v); }";
+    gWmProg = glCreateProgram();
+    glAttachShader(gWmProg, isomapsWmShader(GL_VERTEX_SHADER, vs));
+    glAttachShader(gWmProg, isomapsWmShader(GL_FRAGMENT_SHADER, fs));
+    glLinkProgram(gWmProg);
+    gWmRect = glGetUniformLocation(gWmProg, "r");
+    gWmTexU = glGetUniformLocation(gWmProg, "t");
+    glGenTextures(1, &gWmTex); glBindTexture(GL_TEXTURE_2D, gWmTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kIsomapsWatermarkW, kIsomapsWatermarkH, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, kIsomapsWatermarkRGBA);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    const float quad[8] = {0, 0, 1, 0, 0, 1, 1, 1};            // TRIANGLE_STRIP unit quad
+    glGenVertexArrays(1, &gWmVao); glBindVertexArray(gWmVao);
+    glGenBuffers(1, &gWmVbo); glBindBuffer(GL_ARRAY_BUFFER, gWmVbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0); glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
+    glBindVertexArray(0);
+}
+void isomapsWatermarkDraw() {
+    GLint vp[4]; glGetIntegerv(GL_VIEWPORT, vp);
+    const float fbW = (float)vp[2], fbH = (float)vp[3];
+    if (fbW < 2 || fbH < 2) return;
+    isomapsWatermarkEnsure();
+
+    // ── SAUVEGARDE de tout l'état GL qu'on va toucher ────────────────────────
+    // MapLibre a un Context qui CACHE l'état GL et saute les appels qu'il croit
+    // déjà posés. Si on laisse l'état modifié, la frame suivante déraille (rendu
+    // corrompu). On restaure donc EXACTEMENT l'état d'avant → le cache reste valide.
+    GLint sProg = 0, sVao = 0, sArrayBuf = 0, sActiveTex = 0, sTex0 = 0;
+    GLint sBlendSrcRGB = 0, sBlendDstRGB = 0, sBlendSrcA = 0, sBlendDstA = 0;
+    GLboolean sBlend = glIsEnabled(GL_BLEND);
+    GLboolean sDepthTest = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean sStencil = glIsEnabled(GL_STENCIL_TEST);
+    GLboolean sCull = glIsEnabled(GL_CULL_FACE);
+    GLboolean sDepthMask = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &sDepthMask);
+    glGetIntegerv(GL_CURRENT_PROGRAM, &sProg);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &sVao);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &sArrayBuf);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &sActiveTex);
+    glGetIntegerv(GL_BLEND_SRC_RGB, &sBlendSrcRGB);
+    glGetIntegerv(GL_BLEND_DST_RGB, &sBlendDstRGB);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &sBlendSrcA);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &sBlendDstA);
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &sTex0);
+
+    const float wpx = std::min(std::max(fbW * 0.22f, 90.0f), 340.0f);   // ~22% largeur, borné
+    const float hpx = wpx * (float)kIsomapsWatermarkH / (float)kIsomapsWatermarkW;
+    const float m = fbW * 0.03f;                                        // marge
+    const float rx = (fbW - wpx - m) / fbW, ry = m / fbH, rw = wpx / fbW, rh = hpx / fbH; // bas-droite
+
+    // ── DESSIN ───────────────────────────────────────────────────────────────
+    glUseProgram(gWmProg);
+    glDisable(GL_DEPTH_TEST); glDepthMask(GL_FALSE); glDisable(GL_STENCIL_TEST); glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glBindTexture(GL_TEXTURE_2D, gWmTex); glUniform1i(gWmTexU, 0);   // unité déjà GL_TEXTURE0
+    glUniform4f(gWmRect, rx, ry, rw, rh);
+    glBindVertexArray(gWmVao); glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+    // ── RESTAURATION à l'identique ───────────────────────────────────────────
+    glBindVertexArray((GLuint)sVao);
+    glBindBuffer(GL_ARRAY_BUFFER, (GLuint)sArrayBuf);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)sTex0);            // sur GL_TEXTURE0
+    glActiveTexture((GLenum)sActiveTex);
+    glUseProgram((GLuint)sProg);
+    glBlendFuncSeparate((GLenum)sBlendSrcRGB, (GLenum)sBlendDstRGB,
+                        (GLenum)sBlendSrcA, (GLenum)sBlendDstA);
+    if (sBlend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+    if (sDepthTest) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (sStencil) glEnable(GL_STENCIL_TEST); else glDisable(GL_STENCIL_TEST);
+    if (sCull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+    glDepthMask(sDepthMask);
+}
+} // namespace
+#endif
 #include "android_renderer_backend.hpp"
 #include "map_renderer_runnable.hpp"
 
@@ -258,6 +360,10 @@ void MapRenderer::render(JNIEnv&) {
     }
 
     renderer->render(params);
+
+#if defined(ISOMAPS_SDK_WATERMARK) && MLN_RENDER_BACKEND_OPENGL
+    isomapsWatermarkDraw();   // logo Isomaps incrusté (build SDK vendu uniquement)
+#endif
 
     // Deliver the snapshot if requested
     if (snapshotCallback) {

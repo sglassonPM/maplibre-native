@@ -78,6 +78,11 @@ android {
             externalNativeBuild {
                 cmake {
                     arguments("-DMLN_WITH_OPENGL=ON")
+                    // Watermark Isomaps : OFF par défaut. Activé pour le build SDK vendu via
+                    // -Pisomaps.watermark=true (l'app et tout build standard restent sans logo).
+                    if (project.findProperty("isomaps.watermark") == "true") {
+                        arguments("-DISOMAPS_SDK_WATERMARK=ON")
+                    }
                 }
             }
         }
