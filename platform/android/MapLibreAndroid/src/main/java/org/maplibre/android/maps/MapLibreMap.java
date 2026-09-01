@@ -131,6 +131,33 @@ public final class MapLibreMap {
     NativeMapView.nativeIsomapsSetSkyPanorama(pixels, width, height);
   }
 
+  /** Isomaps : host natif des PARTICULES DE VENT — {@code new CustomLayer("isomaps-wind", isomapsCreateWindLayer())}. */
+  public static long isomapsCreateWindLayer() {
+    return NativeMapView.nativeIsomapsCreateWindLayer();
+  }
+
+  /**
+   * Isomaps : ajoute une zone du champ u/v (DirectByteBuffer RGBA8, R = u, G = v, A = validite).
+   * Les zones se poussent de la plus FINE a la plus GROSSIERE, AVANT la creation du calque.
+   * {@code offset} et {@code scale} viennent du serveur : km/h = canal * scale + offset.
+   */
+  public static void isomapsAddWindField(java.nio.ByteBuffer pixels, int width, int height,
+                                         double ouest, double sud, double est, double nord,
+                                         double offset, double scale) {
+    NativeMapView.nativeIsomapsAddWindField(pixels, width, height, ouest, sud, est, nord, offset, scale);
+  }
+
+  /** Isomaps : vide les zones de vent (a appeler entre deux echeances). */
+  public static void isomapsClearWindFields() {
+    NativeMapView.nativeIsomapsClearWindFields();
+  }
+
+  /** Isomaps : reglages d'animation des particules, tous pilotes par le serveur. */
+  public static void isomapsSetWindSettings(int count, int trail, double lifeS,
+                                            double speedFactor, double speedFull) {
+    NativeMapView.nativeIsomapsSetWindSettings(count, trail, lifeS, speedFactor, speedFull);
+  }
+
   /**
    * Query rendering statistics overlay status.
    */

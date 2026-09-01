@@ -17,6 +17,7 @@
 #include <mbgl/map/map_options.hpp>
 #include <mbgl/util/isomaps_tuning.hpp>
 #include "isomaps_sky_host.hpp"
+#include "isomaps_wind_host.hpp"
 #include <mbgl/math/minmax.hpp>
 #include <mbgl/util/action_journal.hpp>
 #include <mbgl/util/constants.hpp>
@@ -1593,7 +1594,15 @@ void NativeMapView::registerNative(jni::JNIEnv& env) {
                          jni::MakeNativeMethod<decltype(&NativeMapView::isomapsCreateSkyLayer),
                                                &NativeMapView::isomapsCreateSkyLayer>("nativeIsomapsCreateSkyLayer"),
                          jni::MakeNativeMethod<decltype(&NativeMapView::isomapsSetSkyPanorama),
-                                               &NativeMapView::isomapsSetSkyPanorama>("nativeIsomapsSetSkyPanorama"));
+                                               &NativeMapView::isomapsSetSkyPanorama>("nativeIsomapsSetSkyPanorama"),
+                         jni::MakeNativeMethod<decltype(&NativeMapView::isomapsCreateWindLayer),
+                                               &NativeMapView::isomapsCreateWindLayer>("nativeIsomapsCreateWindLayer"),
+                         jni::MakeNativeMethod<decltype(&NativeMapView::isomapsAddWindField),
+                                               &NativeMapView::isomapsAddWindField>("nativeIsomapsAddWindField"),
+                         jni::MakeNativeMethod<decltype(&NativeMapView::isomapsClearWindFields),
+                                               &NativeMapView::isomapsClearWindFields>("nativeIsomapsClearWindFields"),
+                         jni::MakeNativeMethod<decltype(&NativeMapView::isomapsSetWindSettings),
+                                               &NativeMapView::isomapsSetWindSettings>("nativeIsomapsSetWindSettings"));
 }
 
 void NativeMapView::isomapsSetSymbolFade(jni::JNIEnv&,
@@ -1609,6 +1618,46 @@ void NativeMapView::isomapsSetTerrainZoomCap(jni::JNIEnv&, const jni::Class<Nati
 
 jni::jlong NativeMapView::isomapsCreateSkyLayer(jni::JNIEnv&, const jni::Class<NativeMapView>&) {
     return mbgl::android::isomaps_sky::createContext();
+}
+
+jni::jlong NativeMapView::isomapsCreateWindLayer(jni::JNIEnv&, const jni::Class<NativeMapView>&) {
+    return mbgl::android::isomaps_wind::createContext();
+}
+
+// ⚠️ Le paramètre Java doit être Object et non ByteBuffer : un ByteBuffer déclaré
+// fait échouer RegisterNatives, donc abort au chargement de la lib. Même piège que
+// pour le panorama du ciel, et il ne se voit qu'à l'exécution.
+void NativeMapView::isomapsAddWindField(jni::JNIEnv& env,
+                                        const jni::Class<NativeMapView>&,
+                                        const jni::Object<>& buffer,
+                                        jni::jint width,
+                                        jni::jint height,
+                                        jni::jdouble ouest,
+                                        jni::jdouble sud,
+                                        jni::jdouble est,
+                                        jni::jdouble nord,
+                                        jni::jdouble offset,
+                                        jni::jdouble scale) {
+    auto* data = static_cast<uint8_t*>(env.GetDirectBufferAddress(jni::Unwrap(buffer.get())));
+    const jlong capacity = env.GetDirectBufferCapacity(jni::Unwrap(buffer.get()));
+    if (!data || capacity < jlong(width) * height * 4) {
+        return;
+    }
+    mbgl::android::isomaps_wind::addField(data, width, height, ouest, sud, est, nord, offset, scale);
+}
+
+void NativeMapView::isomapsClearWindFields(jni::JNIEnv&, const jni::Class<NativeMapView>&) {
+    mbgl::android::isomaps_wind::clearFields();
+}
+
+void NativeMapView::isomapsSetWindSettings(jni::JNIEnv&,
+                                           const jni::Class<NativeMapView>&,
+                                           jni::jint count,
+                                           jni::jint trail,
+                                           jni::jdouble lifeS,
+                                           jni::jdouble speedFactor,
+                                           jni::jdouble speedFull) {
+    mbgl::android::isomaps_wind::setSettings(count, trail, lifeS, speedFactor, speedFull);
 }
 
 void NativeMapView::isomapsSetSkyPanorama(jni::JNIEnv& env,

@@ -1892,6 +1892,19 @@ final class NativeMapView implements NativeMap {
   // un ByteBuffer déclaré ici ferait échouer RegisterNatives (abort au chargement, vécu).
   public static native void nativeIsomapsSetSkyPanorama(Object pixels, int width, int height);
 
+  // Isomaps — particules de vent. Le tampon est declare Object et non ByteBuffer :
+  // un ByteBuffer fait echouer RegisterNatives, donc abort au chargement.
+  static native long nativeIsomapsCreateWindLayer();
+
+  static native void nativeIsomapsAddWindField(Object pixels, int width, int height,
+                                               double ouest, double sud, double est, double nord,
+                                               double offset, double scale);
+
+  static native void nativeIsomapsClearWindFields();
+
+  static native void nativeIsomapsSetWindSettings(int count, int trail, double lifeS,
+                                                  double speedFactor, double speedFull);
+
   //
   // Snapshot
   //

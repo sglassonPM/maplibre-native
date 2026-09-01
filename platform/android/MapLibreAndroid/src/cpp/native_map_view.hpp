@@ -67,6 +67,28 @@ public:
                                       jni::jint width,
                                       jni::jint height);
 
+    // Isomaps — particules de vent (host GLES compilé dans la lib).
+    static jni::jlong isomapsCreateWindLayer(jni::JNIEnv&, const jni::Class<NativeMapView>&);
+    static void isomapsAddWindField(jni::JNIEnv&,
+                                    const jni::Class<NativeMapView>&,
+                                    const jni::Object<>&,
+                                    jni::jint,
+                                    jni::jint,
+                                    jni::jdouble,
+                                    jni::jdouble,
+                                    jni::jdouble,
+                                    jni::jdouble,
+                                    jni::jdouble,
+                                    jni::jdouble);
+    static void isomapsClearWindFields(jni::JNIEnv&, const jni::Class<NativeMapView>&);
+    static void isomapsSetWindSettings(jni::JNIEnv&,
+                                       const jni::Class<NativeMapView>&,
+                                       jni::jint,
+                                       jni::jint,
+                                       jni::jdouble,
+                                       jni::jdouble,
+                                       jni::jdouble);
+
     NativeMapView(jni::JNIEnv&,
                   const jni::Object<NativeMapView>&,
                   const jni::Object<FileSource>&,
